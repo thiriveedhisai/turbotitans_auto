@@ -1,0 +1,44 @@
+[0.508s] Invoking command in '/mnt/external/u_manohs/diy_challenge/ros2_ws/src/rc_car_controller': PS1=\[\e[33m\]${SHORT_PWD}\[\e[0m\] (\[\e[32m\]$(__git_branch)\[\e[0m\])$ PYTHONPATH=/mnt/external/u_manohs/diy_challenge/ros2_ws/src/rc_car_controller/build/rc_car_controller/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/mnt/external/u_manohs/diy_challenge/ros2_ws/src/rc_car_controller/install/rc_car_controller/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base build/rc_car_controller build --build-base /mnt/external/u_manohs/diy_challenge/ros2_ws/src/rc_car_controller/build/rc_car_controller/build install --record /mnt/external/u_manohs/diy_challenge/ros2_ws/src/rc_car_controller/build/rc_car_controller/install.log --install-scripts $base/lib/rc_car_controller --single-version-externally-managed install_data
+[0.661s] running egg_info
+[0.662s] creating build/rc_car_controller/rc_car_controller.egg-info
+[0.662s] writing build/rc_car_controller/rc_car_controller.egg-info/PKG-INFO
+[0.662s] writing dependency_links to build/rc_car_controller/rc_car_controller.egg-info/dependency_links.txt
+[0.662s] writing entry points to build/rc_car_controller/rc_car_controller.egg-info/entry_points.txt
+[0.662s] writing requirements to build/rc_car_controller/rc_car_controller.egg-info/requires.txt
+[0.662s] writing top-level names to build/rc_car_controller/rc_car_controller.egg-info/top_level.txt
+[0.662s] writing manifest file 'build/rc_car_controller/rc_car_controller.egg-info/SOURCES.txt'
+[0.663s] reading manifest file 'build/rc_car_controller/rc_car_controller.egg-info/SOURCES.txt'
+[0.664s] writing manifest file 'build/rc_car_controller/rc_car_controller.egg-info/SOURCES.txt'
+[0.664s] running build
+[0.664s] running build_py
+[0.664s] creating /mnt/external/u_manohs/diy_challenge/ros2_ws/src/rc_car_controller/build/rc_car_controller/build
+[0.664s] creating /mnt/external/u_manohs/diy_challenge/ros2_ws/src/rc_car_controller/build/rc_car_controller/build/lib
+[0.664s] creating /mnt/external/u_manohs/diy_challenge/ros2_ws/src/rc_car_controller/build/rc_car_controller/build/lib/rc_car_controller
+[0.664s] copying rc_car_controller/pca9685.py -> /mnt/external/u_manohs/diy_challenge/ros2_ws/src/rc_car_controller/build/rc_car_controller/build/lib/rc_car_controller
+[0.664s] copying rc_car_controller/__init__.py -> /mnt/external/u_manohs/diy_challenge/ros2_ws/src/rc_car_controller/build/rc_car_controller/build/lib/rc_car_controller
+[0.664s] copying rc_car_controller/rc_car_controller_node.py -> /mnt/external/u_manohs/diy_challenge/ros2_ws/src/rc_car_controller/build/rc_car_controller/build/lib/rc_car_controller
+[0.664s] running install
+[0.664s] running install_lib
+[0.665s] creating /mnt/external/u_manohs/diy_challenge/ros2_ws/src/rc_car_controller/install/rc_car_controller/lib/python3.10/site-packages/rc_car_controller
+[0.665s] copying /mnt/external/u_manohs/diy_challenge/ros2_ws/src/rc_car_controller/build/rc_car_controller/build/lib/rc_car_controller/pca9685.py -> /mnt/external/u_manohs/diy_challenge/ros2_ws/src/rc_car_controller/install/rc_car_controller/lib/python3.10/site-packages/rc_car_controller
+[0.665s] copying /mnt/external/u_manohs/diy_challenge/ros2_ws/src/rc_car_controller/build/rc_car_controller/build/lib/rc_car_controller/__init__.py -> /mnt/external/u_manohs/diy_challenge/ros2_ws/src/rc_car_controller/install/rc_car_controller/lib/python3.10/site-packages/rc_car_controller
+[0.665s] copying /mnt/external/u_manohs/diy_challenge/ros2_ws/src/rc_car_controller/build/rc_car_controller/build/lib/rc_car_controller/rc_car_controller_node.py -> /mnt/external/u_manohs/diy_challenge/ros2_ws/src/rc_car_controller/install/rc_car_controller/lib/python3.10/site-packages/rc_car_controller
+[0.665s] byte-compiling /mnt/external/u_manohs/diy_challenge/ros2_ws/src/rc_car_controller/install/rc_car_controller/lib/python3.10/site-packages/rc_car_controller/pca9685.py to pca9685.cpython-310.pyc
+[0.666s] byte-compiling /mnt/external/u_manohs/diy_challenge/ros2_ws/src/rc_car_controller/install/rc_car_controller/lib/python3.10/site-packages/rc_car_controller/__init__.py to __init__.cpython-310.pyc
+[0.666s] byte-compiling /mnt/external/u_manohs/diy_challenge/ros2_ws/src/rc_car_controller/install/rc_car_controller/lib/python3.10/site-packages/rc_car_controller/rc_car_controller_node.py to rc_car_controller_node.cpython-310.pyc
+[0.667s] running install_data
+[0.667s] creating /mnt/external/u_manohs/diy_challenge/ros2_ws/src/rc_car_controller/install/rc_car_controller/share/ament_index
+[0.667s] creating /mnt/external/u_manohs/diy_challenge/ros2_ws/src/rc_car_controller/install/rc_car_controller/share/ament_index/resource_index
+[0.667s] creating /mnt/external/u_manohs/diy_challenge/ros2_ws/src/rc_car_controller/install/rc_car_controller/share/ament_index/resource_index/packages
+[0.667s] copying resource/rc_car_controller -> /mnt/external/u_manohs/diy_challenge/ros2_ws/src/rc_car_controller/install/rc_car_controller/share/ament_index/resource_index/packages
+[0.667s] copying package.xml -> /mnt/external/u_manohs/diy_challenge/ros2_ws/src/rc_car_controller/install/rc_car_controller/share/rc_car_controller
+[0.667s] creating /mnt/external/u_manohs/diy_challenge/ros2_ws/src/rc_car_controller/install/rc_car_controller/share/rc_car_controller/launch
+[0.667s] copying launch/rc_car_controller.launch.py -> /mnt/external/u_manohs/diy_challenge/ros2_ws/src/rc_car_controller/install/rc_car_controller/share/rc_car_controller/launch
+[0.667s] creating /mnt/external/u_manohs/diy_challenge/ros2_ws/src/rc_car_controller/install/rc_car_controller/share/rc_car_controller/config
+[0.667s] copying config/params.yaml -> /mnt/external/u_manohs/diy_challenge/ros2_ws/src/rc_car_controller/install/rc_car_controller/share/rc_car_controller/config
+[0.667s] running install_egg_info
+[0.668s] Copying build/rc_car_controller/rc_car_controller.egg-info to /mnt/external/u_manohs/diy_challenge/ros2_ws/src/rc_car_controller/install/rc_car_controller/lib/python3.10/site-packages/rc_car_controller-0.1.0-py3.10.egg-info
+[0.669s] running install_scripts
+[0.680s] Installing rc_car_controller_node script to /mnt/external/u_manohs/diy_challenge/ros2_ws/src/rc_car_controller/install/rc_car_controller/lib/rc_car_controller
+[0.681s] writing list of installed files to '/mnt/external/u_manohs/diy_challenge/ros2_ws/src/rc_car_controller/build/rc_car_controller/install.log'
+[0.693s] Invoked command in '/mnt/external/u_manohs/diy_challenge/ros2_ws/src/rc_car_controller' returned '0': PS1=\[\e[33m\]${SHORT_PWD}\[\e[0m\] (\[\e[32m\]$(__git_branch)\[\e[0m\])$ PYTHONPATH=/mnt/external/u_manohs/diy_challenge/ros2_ws/src/rc_car_controller/build/rc_car_controller/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/mnt/external/u_manohs/diy_challenge/ros2_ws/src/rc_car_controller/install/rc_car_controller/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base build/rc_car_controller build --build-base /mnt/external/u_manohs/diy_challenge/ros2_ws/src/rc_car_controller/build/rc_car_controller/build install --record /mnt/external/u_manohs/diy_challenge/ros2_ws/src/rc_car_controller/build/rc_car_controller/install.log --install-scripts $base/lib/rc_car_controller --single-version-externally-managed install_data

@@ -1,0 +1,27 @@
+running egg_info
+writing build/rc_car_controller/rc_car_controller.egg-info/PKG-INFO
+writing dependency_links to build/rc_car_controller/rc_car_controller.egg-info/dependency_links.txt
+writing entry points to build/rc_car_controller/rc_car_controller.egg-info/entry_points.txt
+writing requirements to build/rc_car_controller/rc_car_controller.egg-info/requires.txt
+writing top-level names to build/rc_car_controller/rc_car_controller.egg-info/top_level.txt
+reading manifest file 'build/rc_car_controller/rc_car_controller.egg-info/SOURCES.txt'
+writing manifest file 'build/rc_car_controller/rc_car_controller.egg-info/SOURCES.txt'
+running build
+running build_py
+running install
+running install_lib
+creating /home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/lib/python3.12/site-packages/rc_car_controller
+copying /home/turbotitans/ros2_ws/src/rc_car_controller/build/rc_car_controller/build/lib/rc_car_controller/rc_car_controller_node.py -> /home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/lib/python3.12/site-packages/rc_car_controller
+copying /home/turbotitans/ros2_ws/src/rc_car_controller/build/rc_car_controller/build/lib/rc_car_controller/__init__.py -> /home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/lib/python3.12/site-packages/rc_car_controller
+copying /home/turbotitans/ros2_ws/src/rc_car_controller/build/rc_car_controller/build/lib/rc_car_controller/pca9685.py -> /home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/lib/python3.12/site-packages/rc_car_controller
+byte-compiling /home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/lib/python3.12/site-packages/rc_car_controller/rc_car_controller_node.py to rc_car_controller_node.cpython-312.pyc
+byte-compiling /home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/lib/python3.12/site-packages/rc_car_controller/__init__.py to __init__.cpython-312.pyc
+byte-compiling /home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/lib/python3.12/site-packages/rc_car_controller/pca9685.py to pca9685.cpython-312.pyc
+running install_data
+copying launch/rc_car_controller.launch.py -> /home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/share/rc_car_controller/launch
+copying config/params.yaml -> /home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/share/rc_car_controller/config
+running install_egg_info
+Copying build/rc_car_controller/rc_car_controller.egg-info to /home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/lib/python3.12/site-packages/rc_car_controller-0.1.0-py3.12.egg-info
+running install_scripts
+Installing rc_car_controller_node script to /home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/lib/rc_car_controller
+writing list of installed files to '/home/turbotitans/ros2_ws/src/rc_car_controller/build/rc_car_controller/install.log'

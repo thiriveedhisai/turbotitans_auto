@@ -1,0 +1,89 @@
+[0.494s] DEBUG:colcon:Command line arguments: ['/usr/bin/colcon', 'build']
+[0.495s] DEBUG:colcon:Parsed command line arguments: Namespace(log_base=None, log_level=None, verb_name='build', build_base='build', install_base='install', merge_install=False, symlink_install=False, test_result_base=None, continue_on_error=False, executor='parallel', parallel_workers=6, event_handlers=None, ignore_user_meta=False, metas=['./colcon.meta'], base_paths=['.'], packages_ignore=None, packages_ignore_regex=None, paths=None, packages_up_to=None, packages_up_to_regex=None, packages_above=None, packages_above_and_dependencies=None, packages_above_depth=None, packages_select_by_dep=None, packages_skip_by_dep=None, packages_skip_up_to=None, packages_select_build_failed=False, packages_skip_build_finished=False, packages_select_test_failures=False, packages_skip_test_passed=False, packages_select=None, packages_skip=None, packages_select_regex=None, packages_skip_regex=None, packages_start=None, packages_end=None, allow_overriding=[], cmake_args=None, cmake_target=None, cmake_target_skip_unavailable=False, cmake_clean_cache=False, cmake_clean_first=False, cmake_force_configure=False, ament_cmake_args=None, catkin_cmake_args=None, catkin_skip_building_tests=False, mixin_files=None, mixin=None, verb_parser=<colcon_mixin.mixin.mixin_argument.MixinArgumentDecorator object at 0xffffae568dd0>, verb_extension=<colcon_core.verb.build.BuildVerb object at 0xffffae568680>, main=<bound method BuildVerb.main of <colcon_core.verb.build.BuildVerb object at 0xffffae568680>>, mixin_verb=('build',))
+[0.767s] Level 1:colcon.colcon_core.package_discovery:discover_packages(colcon_meta) check parameters
+[0.768s] Level 1:colcon.colcon_core.package_discovery:discover_packages(recursive) check parameters
+[0.768s] Level 1:colcon.colcon_core.package_discovery:discover_packages(ignore) check parameters
+[0.768s] Level 1:colcon.colcon_core.package_discovery:discover_packages(path) check parameters
+[0.768s] Level 1:colcon.colcon_core.package_discovery:discover_packages(colcon_meta) discover
+[0.768s] Level 1:colcon.colcon_core.package_discovery:discover_packages(recursive) discover
+[0.768s] INFO:colcon.colcon_core.package_discovery:Crawling recursively for packages in '/home/turbotitans/ros2_ws/src/rc_car_controller'
+[0.768s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extensions ['ignore', 'ignore_ament_install']
+[0.769s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'ignore'
+[0.769s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'ignore_ament_install'
+[0.769s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extensions ['colcon_pkg']
+[0.769s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'colcon_pkg'
+[0.769s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extensions ['colcon_meta']
+[0.769s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'colcon_meta'
+[0.769s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extensions ['ros']
+[0.769s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'ros'
+[0.938s] DEBUG:colcon.colcon_core.package_identification:Package '.' with type 'ros.ament_python' and name 'rc_car_controller'
+[0.939s] Level 1:colcon.colcon_core.package_discovery:discover_packages(recursive) using defaults
+[0.939s] Level 1:colcon.colcon_core.package_discovery:discover_packages(ignore) discover
+[0.940s] Level 1:colcon.colcon_core.package_discovery:discover_packages(ignore) using defaults
+[0.940s] Level 1:colcon.colcon_core.package_discovery:discover_packages(path) discover
+[0.940s] Level 1:colcon.colcon_core.package_discovery:discover_packages(path) using defaults
+[1.034s] Level 1:colcon.colcon_core.package_discovery:discover_packages(prefix_path) check parameters
+[1.035s] Level 1:colcon.colcon_core.package_discovery:discover_packages(prefix_path) discover
+[1.040s] WARNING:colcon.colcon_ros.prefix_path.ament:The path '/home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller' in the environment variable AMENT_PREFIX_PATH doesn't exist
+[1.043s] DEBUG:colcon.colcon_installed_package_information.package_discovery:Found 0 installed packages in /home/turbotitans/ros2_ws/src/rc_car_controller/install
+[1.047s] DEBUG:colcon.colcon_installed_package_information.package_discovery:Found 328 installed packages in /opt/ros/jazzy
+[1.049s] Level 1:colcon.colcon_core.package_discovery:discover_packages(prefix_path) using defaults
+[1.164s] Level 5:colcon.colcon_core.verb:set package 'rc_car_controller' build argument 'cmake_args' from command line to 'None'
+[1.164s] Level 5:colcon.colcon_core.verb:set package 'rc_car_controller' build argument 'cmake_target' from command line to 'None'
+[1.164s] Level 5:colcon.colcon_core.verb:set package 'rc_car_controller' build argument 'cmake_target_skip_unavailable' from command line to 'False'
+[1.164s] Level 5:colcon.colcon_core.verb:set package 'rc_car_controller' build argument 'cmake_clean_cache' from command line to 'False'
+[1.164s] Level 5:colcon.colcon_core.verb:set package 'rc_car_controller' build argument 'cmake_clean_first' from command line to 'False'
+[1.164s] Level 5:colcon.colcon_core.verb:set package 'rc_car_controller' build argument 'cmake_force_configure' from command line to 'False'
+[1.164s] Level 5:colcon.colcon_core.verb:set package 'rc_car_controller' build argument 'ament_cmake_args' from command line to 'None'
+[1.164s] Level 5:colcon.colcon_core.verb:set package 'rc_car_controller' build argument 'catkin_cmake_args' from command line to 'None'
+[1.164s] Level 5:colcon.colcon_core.verb:set package 'rc_car_controller' build argument 'catkin_skip_building_tests' from command line to 'False'
+[1.164s] DEBUG:colcon.colcon_core.verb:Building package 'rc_car_controller' with the following arguments: {'ament_cmake_args': None, 'build_base': '/home/turbotitans/ros2_ws/src/rc_car_controller/build/rc_car_controller', 'catkin_cmake_args': None, 'catkin_skip_building_tests': False, 'cmake_args': None, 'cmake_clean_cache': False, 'cmake_clean_first': False, 'cmake_force_configure': False, 'cmake_target': None, 'cmake_target_skip_unavailable': False, 'install_base': '/home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller', 'merge_install': False, 'path': '/home/turbotitans/ros2_ws/src/rc_car_controller', 'symlink_install': False, 'test_result_base': None}
+[1.165s] INFO:colcon.colcon_core.executor:Executing jobs using 'parallel' executor
+[1.166s] DEBUG:colcon.colcon_parallel_executor.executor.parallel:run_until_complete
+[1.167s] INFO:colcon.colcon_ros.task.ament_python.build:Building ROS package in '/home/turbotitans/ros2_ws/src/rc_car_controller' with build type 'ament_python'
+[1.167s] Level 1:colcon.colcon_core.shell:create_environment_hook('rc_car_controller', 'ament_prefix_path')
+[1.186s] INFO:colcon.colcon_core.plugin_system:Skipping extension 'colcon_core.shell.bat': Not used on non-Windows systems
+[1.187s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/share/rc_car_controller/hook/ament_prefix_path.ps1'
+[1.190s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/share/rc_car_controller/hook/ament_prefix_path.dsv'
+[1.191s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/share/rc_car_controller/hook/ament_prefix_path.sh'
+[1.193s] INFO:colcon.colcon_core.shell:Skip shell extension 'powershell' for command environment: Not usable outside of PowerShell
+[1.193s] DEBUG:colcon.colcon_core.shell:Skip shell extension 'dsv' for command environment
+[1.729s] INFO:colcon.colcon_core.task.python.build:Building Python package in '/home/turbotitans/ros2_ws/src/rc_car_controller'
+[1.729s] INFO:colcon.colcon_core.shell:Skip shell extension 'powershell' for command environment: Not usable outside of PowerShell
+[1.729s] DEBUG:colcon.colcon_core.shell:Skip shell extension 'dsv' for command environment
+[4.245s] DEBUG:colcon.colcon_core.task.python.build:Available setuptools commands: install_egg_info, upload_docs, install_data, rotate, saveopts, upload, init_catalog, register, build_py, build_clib, dist_info, update_catalog, build_ext, egg_info, compile_catalog, bdist_rpm, test, install_lib, bdist_wheel, build_scripts, install_headers, clean, symlink_data, extract_messages, bdist, install, check, install_scripts, develop, sdist, bdist_egg, alias, build, easy_install, bdist_dumb, editable_wheel, setopt
+[4.253s] DEBUG:colcon.colcon_core.event_handler.log_command:Invoking command in '/home/turbotitans/ros2_ws/src/rc_car_controller': DEBUGINFOD_URLS=https://debuginfod.ubuntu.com PYTHONPATH=/home/turbotitans/ros2_ws/src/rc_car_controller/build/rc_car_controller/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base build/rc_car_controller build --build-base /home/turbotitans/ros2_ws/src/rc_car_controller/build/rc_car_controller/build install --record /home/turbotitans/ros2_ws/src/rc_car_controller/build/rc_car_controller/install.log --install-scripts $base/lib/rc_car_controller --single-version-externally-managed install_data
+[5.619s] DEBUG:colcon.colcon_core.event_handler.log_command:Invoked command in '/home/turbotitans/ros2_ws/src/rc_car_controller' returned '0': DEBUGINFOD_URLS=https://debuginfod.ubuntu.com PYTHONPATH=/home/turbotitans/ros2_ws/src/rc_car_controller/build/rc_car_controller/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base build/rc_car_controller build --build-base /home/turbotitans/ros2_ws/src/rc_car_controller/build/rc_car_controller/build install --record /home/turbotitans/ros2_ws/src/rc_car_controller/build/rc_car_controller/install.log --install-scripts $base/lib/rc_car_controller --single-version-externally-managed install_data
+[5.648s] Level 1:colcon.colcon_core.environment:checking '/home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller' for CMake module files
+[5.650s] Level 1:colcon.colcon_core.environment:checking '/home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller' for CMake config files
+[5.654s] Level 1:colcon.colcon_core.environment:checking '/home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/lib'
+[5.655s] Level 1:colcon.colcon_core.environment:checking '/home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/bin'
+[5.655s] Level 1:colcon.colcon_core.environment:checking '/home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/lib/pkgconfig/rc_car_controller.pc'
+[5.657s] Level 1:colcon.colcon_core.environment:checking '/home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/lib/python3.12/site-packages'
+[5.657s] Level 1:colcon.colcon_core.shell:create_environment_hook('rc_car_controller', 'pythonpath')
+[5.659s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/share/rc_car_controller/hook/pythonpath.ps1'
+[5.662s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/share/rc_car_controller/hook/pythonpath.dsv'
+[5.663s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/share/rc_car_controller/hook/pythonpath.sh'
+[5.666s] Level 1:colcon.colcon_core.environment:checking '/home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/bin'
+[5.666s] Level 1:colcon.colcon_core.environment:create_environment_scripts_only(rc_car_controller)
+[5.667s] INFO:colcon.colcon_core.shell:Creating package script '/home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/share/rc_car_controller/package.ps1'
+[5.679s] INFO:colcon.colcon_core.shell:Creating package descriptor '/home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/share/rc_car_controller/package.dsv'
+[5.681s] INFO:colcon.colcon_core.shell:Creating package script '/home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/share/rc_car_controller/package.sh'
+[5.686s] INFO:colcon.colcon_core.shell:Creating package script '/home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/share/rc_car_controller/package.bash'
+[5.689s] INFO:colcon.colcon_core.shell:Creating package script '/home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/share/rc_car_controller/package.zsh'
+[5.693s] Level 1:colcon.colcon_core.environment:create_file_with_runtime_dependencies(/home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/share/colcon-core/packages/rc_car_controller)
+[5.696s] DEBUG:colcon.colcon_parallel_executor.executor.parallel:closing loop
+[5.697s] DEBUG:colcon.colcon_parallel_executor.executor.parallel:loop closed
+[5.697s] DEBUG:colcon.colcon_parallel_executor.executor.parallel:run_until_complete finished with '0'
+[5.698s] DEBUG:colcon.colcon_core.event_reactor:joining thread
+[5.700s] DEBUG:colcon.colcon_core.event_reactor:joined thread
+[5.701s] INFO:colcon.colcon_core.shell:Creating prefix script '/home/turbotitans/ros2_ws/src/rc_car_controller/install/local_setup.ps1'
+[5.711s] INFO:colcon.colcon_core.shell:Creating prefix util module '/home/turbotitans/ros2_ws/src/rc_car_controller/install/_local_setup_util_ps1.py'
+[5.716s] INFO:colcon.colcon_core.shell:Creating prefix chain script '/home/turbotitans/ros2_ws/src/rc_car_controller/install/setup.ps1'
+[5.721s] INFO:colcon.colcon_core.shell:Creating prefix script '/home/turbotitans/ros2_ws/src/rc_car_controller/install/local_setup.sh'
+[5.724s] INFO:colcon.colcon_core.shell:Creating prefix util module '/home/turbotitans/ros2_ws/src/rc_car_controller/install/_local_setup_util_sh.py'
+[5.727s] INFO:colcon.colcon_core.shell:Creating prefix chain script '/home/turbotitans/ros2_ws/src/rc_car_controller/install/setup.sh'
+[5.731s] INFO:colcon.colcon_core.shell:Creating prefix script '/home/turbotitans/ros2_ws/src/rc_car_controller/install/local_setup.bash'
+[5.733s] INFO:colcon.colcon_core.shell:Creating prefix chain script '/home/turbotitans/ros2_ws/src/rc_car_controller/install/setup.bash'
+[5.737s] INFO:colcon.colcon_core.shell:Creating prefix script '/home/turbotitans/ros2_ws/src/rc_car_controller/install/local_setup.zsh'
+[5.740s] INFO:colcon.colcon_core.shell:Creating prefix chain script '/home/turbotitans/ros2_ws/src/rc_car_controller/install/setup.zsh'

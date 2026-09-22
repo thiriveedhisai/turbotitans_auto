@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>rc_car_controller</name>
+  <version>0.1.0</version>
+  <description>
+    RC car controller that converts ackermann_msgs/AckermannDrive commands into
+    servo (steering) and ESC (throttle) PWM signals using a PCA9685 on I2C bus 7
+    at address 0x40. The PCA9685 output-enable (OE) pin is wired to the Jetson
+    Nano 40-pin header (GPIO09) and is held high during initialization, then
+    driven low once the channels are configured to a safe 50 Hz / 1500 us state.
+  </description>
+  <maintainer email="user@example.com">u_manohs</maintainer>
+  <license>Apache-2.0</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>ackermann_msgs</exec_depend>
+  <exec_depend>python3-smbus2</exec_depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

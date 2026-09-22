@@ -1,0 +1,25 @@
+[2.915s] Invoking command in '/home/turbotitans/ros2_ws/src/rc_car_controller': DEBUGINFOD_URLS=https://debuginfod.ubuntu.com PYTHONPATH=/home/turbotitans/ros2_ws/src/rc_car_controller/build/rc_car_controller/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base build/rc_car_controller build --build-base /home/turbotitans/ros2_ws/src/rc_car_controller/build/rc_car_controller/build install --record /home/turbotitans/ros2_ws/src/rc_car_controller/build/rc_car_controller/install.log --install-scripts $base/lib/rc_car_controller --single-version-externally-managed install_data
+[3.536s] running egg_info
+[3.579s] writing build/rc_car_controller/rc_car_controller.egg-info/PKG-INFO
+[3.587s] writing dependency_links to build/rc_car_controller/rc_car_controller.egg-info/dependency_links.txt
+[3.589s] writing entry points to build/rc_car_controller/rc_car_controller.egg-info/entry_points.txt
+[3.590s] writing requirements to build/rc_car_controller/rc_car_controller.egg-info/requires.txt
+[3.591s] writing top-level names to build/rc_car_controller/rc_car_controller.egg-info/top_level.txt
+[3.689s] reading manifest file 'build/rc_car_controller/rc_car_controller.egg-info/SOURCES.txt'
+[3.698s] writing manifest file 'build/rc_car_controller/rc_car_controller.egg-info/SOURCES.txt'
+[3.698s] running build
+[3.698s] running build_py
+[3.700s] copying rc_car_controller/teleop_keyboard.py -> /home/turbotitans/ros2_ws/src/rc_car_controller/build/rc_car_controller/build/lib/rc_car_controller
+[3.701s] running install
+[3.714s] running install_lib
+[3.762s] copying /home/turbotitans/ros2_ws/src/rc_car_controller/build/rc_car_controller/build/lib/rc_car_controller/teleop_keyboard.py -> /home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/lib/python3.12/site-packages/rc_car_controller
+[3.764s] byte-compiling /home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/lib/python3.12/site-packages/rc_car_controller/teleop_keyboard.py to teleop_keyboard.cpython-312.pyc
+[3.766s] running install_data
+[3.766s] running install_egg_info
+[3.818s] removing '/home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/lib/python3.12/site-packages/rc_car_controller-0.1.0-py3.12.egg-info' (and everything under it)
+[3.818s] Copying build/rc_car_controller/rc_car_controller.egg-info to /home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/lib/python3.12/site-packages/rc_car_controller-0.1.0-py3.12.egg-info
+[3.827s] running install_scripts
+[4.174s] Installing rc_car_controller_node script to /home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/lib/rc_car_controller
+[4.175s] Installing teleop_keyboard script to /home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/lib/rc_car_controller
+[4.183s] writing list of installed files to '/home/turbotitans/ros2_ws/src/rc_car_controller/build/rc_car_controller/install.log'
+[4.266s] Invoked command in '/home/turbotitans/ros2_ws/src/rc_car_controller' returned '0': DEBUGINFOD_URLS=https://debuginfod.ubuntu.com PYTHONPATH=/home/turbotitans/ros2_ws/src/rc_car_controller/build/rc_car_controller/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base build/rc_car_controller build --build-base /home/turbotitans/ros2_ws/src/rc_car_controller/build/rc_car_controller/build install --record /home/turbotitans/ros2_ws/src/rc_car_controller/build/rc_car_controller/install.log --install-scripts $base/lib/rc_car_controller --single-version-externally-managed install_data

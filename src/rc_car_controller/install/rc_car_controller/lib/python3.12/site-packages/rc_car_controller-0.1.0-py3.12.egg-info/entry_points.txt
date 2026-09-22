@@ -1,0 +1,3 @@
+[console_scripts]
+rc_car_controller_node = rc_car_controller.rc_car_controller_node:main
+teleop_keyboard = rc_car_controller.teleop_keyboard:main

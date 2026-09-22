@@ -1,0 +1,49 @@
+[3.084s] Invoking command in '/home/turbotitans/ros2_ws/src/rc_car_controller': DEBUGINFOD_URLS=https://debuginfod.ubuntu.com PYTHONPATH=/home/turbotitans/ros2_ws/src/rc_car_controller/build/rc_car_controller/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base build/rc_car_controller build --build-base /home/turbotitans/ros2_ws/src/rc_car_controller/build/rc_car_controller/build install --record /home/turbotitans/ros2_ws/src/rc_car_controller/build/rc_car_controller/install.log --install-scripts $base/lib/rc_car_controller --single-version-externally-managed install_data
+[3.698s] running egg_info
+[3.699s] creating build/rc_car_controller/rc_car_controller.egg-info
+[3.770s] writing build/rc_car_controller/rc_car_controller.egg-info/PKG-INFO
+[3.770s] writing dependency_links to build/rc_car_controller/rc_car_controller.egg-info/dependency_links.txt
+[3.770s] writing entry points to build/rc_car_controller/rc_car_controller.egg-info/entry_points.txt
+[3.771s] writing requirements to build/rc_car_controller/rc_car_controller.egg-info/requires.txt
+[3.771s] writing top-level names to build/rc_car_controller/rc_car_controller.egg-info/top_level.txt
+[3.771s] writing manifest file 'build/rc_car_controller/rc_car_controller.egg-info/SOURCES.txt'
+[3.869s] reading manifest file 'build/rc_car_controller/rc_car_controller.egg-info/SOURCES.txt'
+[3.870s] writing manifest file 'build/rc_car_controller/rc_car_controller.egg-info/SOURCES.txt'
+[3.871s] running build
+[3.871s] running build_py
+[3.872s] creating /home/turbotitans/ros2_ws/src/rc_car_controller/build/rc_car_controller/build
+[3.872s] creating /home/turbotitans/ros2_ws/src/rc_car_controller/build/rc_car_controller/build/lib
+[3.872s] creating /home/turbotitans/ros2_ws/src/rc_car_controller/build/rc_car_controller/build/lib/rc_car_controller
+[3.872s] copying rc_car_controller/rc_car_controller_node.py -> /home/turbotitans/ros2_ws/src/rc_car_controller/build/rc_car_controller/build/lib/rc_car_controller
+[3.881s] copying rc_car_controller/teleop_keyboard.py -> /home/turbotitans/ros2_ws/src/rc_car_controller/build/rc_car_controller/build/lib/rc_car_controller
+[3.881s] copying rc_car_controller/__init__.py -> /home/turbotitans/ros2_ws/src/rc_car_controller/build/rc_car_controller/build/lib/rc_car_controller
+[3.881s] copying rc_car_controller/pca9685.py -> /home/turbotitans/ros2_ws/src/rc_car_controller/build/rc_car_controller/build/lib/rc_car_controller
+[3.882s] running install
+[3.896s] running install_lib
+[3.944s] creating /home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/lib/python3.12/site-packages/rc_car_controller
+[3.944s] copying /home/turbotitans/ros2_ws/src/rc_car_controller/build/rc_car_controller/build/lib/rc_car_controller/rc_car_controller_node.py -> /home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/lib/python3.12/site-packages/rc_car_controller
+[3.944s] copying /home/turbotitans/ros2_ws/src/rc_car_controller/build/rc_car_controller/build/lib/rc_car_controller/teleop_keyboard.py -> /home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/lib/python3.12/site-packages/rc_car_controller
+[3.944s] copying /home/turbotitans/ros2_ws/src/rc_car_controller/build/rc_car_controller/build/lib/rc_car_controller/__init__.py -> /home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/lib/python3.12/site-packages/rc_car_controller
+[3.945s] copying /home/turbotitans/ros2_ws/src/rc_car_controller/build/rc_car_controller/build/lib/rc_car_controller/pca9685.py -> /home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/lib/python3.12/site-packages/rc_car_controller
+[3.946s] byte-compiling /home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/lib/python3.12/site-packages/rc_car_controller/rc_car_controller_node.py to rc_car_controller_node.cpython-312.pyc
+[3.949s] byte-compiling /home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/lib/python3.12/site-packages/rc_car_controller/teleop_keyboard.py to teleop_keyboard.cpython-312.pyc
+[3.951s] byte-compiling /home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/lib/python3.12/site-packages/rc_car_controller/__init__.py to __init__.cpython-312.pyc
+[3.952s] byte-compiling /home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/lib/python3.12/site-packages/rc_car_controller/pca9685.py to pca9685.cpython-312.pyc
+[3.953s] running install_data
+[3.953s] creating /home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/share/ament_index
+[3.954s] creating /home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/share/ament_index/resource_index
+[3.954s] creating /home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/share/ament_index/resource_index/packages
+[3.954s] copying resource/rc_car_controller -> /home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/share/ament_index/resource_index/packages
+[3.954s] copying package.xml -> /home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/share/rc_car_controller
+[3.954s] creating /home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/share/rc_car_controller/launch
+[3.955s] copying launch/rc_car_controller.launch.py -> /home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/share/rc_car_controller/launch
+[3.961s] copying launch/teleop.launch.py -> /home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/share/rc_car_controller/launch
+[3.962s] creating /home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/share/rc_car_controller/config
+[3.962s] copying config/params.yaml -> /home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/share/rc_car_controller/config
+[3.963s] running install_egg_info
+[4.015s] Copying build/rc_car_controller/rc_car_controller.egg-info to /home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/lib/python3.12/site-packages/rc_car_controller-0.1.0-py3.12.egg-info
+[4.016s] running install_scripts
+[4.365s] Installing rc_car_controller_node script to /home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/lib/rc_car_controller
+[4.365s] Installing teleop_keyboard script to /home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/lib/rc_car_controller
+[4.365s] writing list of installed files to '/home/turbotitans/ros2_ws/src/rc_car_controller/build/rc_car_controller/install.log'
+[4.451s] Invoked command in '/home/turbotitans/ros2_ws/src/rc_car_controller' returned '0': DEBUGINFOD_URLS=https://debuginfod.ubuntu.com PYTHONPATH=/home/turbotitans/ros2_ws/src/rc_car_controller/build/rc_car_controller/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/turbotitans/ros2_ws/src/rc_car_controller/install/rc_car_controller/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base build/rc_car_controller build --build-base /home/turbotitans/ros2_ws/src/rc_car_controller/build/rc_car_controller/build install --record /home/turbotitans/ros2_ws/src/rc_car_controller/build/rc_car_controller/install.log --install-scripts $base/lib/rc_car_controller --single-version-externally-managed install_data

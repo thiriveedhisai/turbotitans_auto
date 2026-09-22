@@ -1,0 +1,7 @@
+Metadata-Version: 2.1
+Name: rc-car-controller
+Version: 0.1.0
+Summary: AckermannDrive to PCA9685 PWM controller for an RC car.
+Maintainer: u_manohs
+Maintainer-email: user@example.com
+License: Apache-2.0

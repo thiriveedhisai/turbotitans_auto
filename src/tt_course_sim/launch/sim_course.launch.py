@@ -46,6 +46,7 @@ def generate_launch_description():
             [FindPackageShare('tt_obstacle_course'), 'launch', 'obstacle_course.launch.py'])),
         launch_arguments={'sensors': 'false', 'camera_nodes': 'false', 'motor': 'false',
                           'use_nav2': LaunchConfiguration('use_nav2'),
+                          'turn_radius': LaunchConfiguration('true_min_turn_radius'),
                           'start_zone': LaunchConfiguration('start_zone'),
                           'tuning': LaunchConfiguration('tuning')}.items())
     stop_all = RegisterEventHandler(OnProcessExit(target_action=sim,

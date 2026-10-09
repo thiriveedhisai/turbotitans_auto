@@ -61,7 +61,7 @@ speed_governor:
     front_half_angle_deg: 35.0         # widest allowed car-wash blind cone
     slow_distance: 0.8
     stop_distance: 0.33                # keep below k_turn.front_clearance
-    rear_stop_distance: 0.33
+    rear_stop_distance: 0.43           # lidar is ~0.30 ahead of the rear bumper
     ttc_brake_s: 0.6
     crawl_speed: 0.15
 

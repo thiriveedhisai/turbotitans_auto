@@ -89,6 +89,15 @@ class ScanView:
             return math.inf
         return float(np.percentile(d, 20))
 
+    def far_side_wall(self, side, max_range=5.0):
+        """Perpendicular distance to the wall on ``side`` behind any obstacles in
+        front of it (farthest consistent returns, 60-120 deg). None if unseen."""
+        lo, hi = sorted((side * 60 * DEG, side * 120 * DEG))
+        a, r = self.sector(lo, hi)
+        ok = r < max_range
+        d = np.sort(r[ok] * np.abs(np.sin(a[ok])))
+        return float(d[int(0.8 * (d.size - 1))]) if d.size >= 5 else None
+
     def wall_estimate(self, side, theta=45 * DEG, lookahead=0.0, max_range=3.0):
         """Two-beam wall fit. Returns (projected_distance, alpha) or None.
 
@@ -117,41 +126,7 @@ class ScanView:
         r = self.ranges[m]
         if side < 0:
             a, r = a[::-1], r[::-1]
-        if a.size < 5:
-            return []
-        perp = r * np.abs(np.sin(a))
-        finite = np.isfinite(perp)
-        if finite.sum() < 5:
-            return []
-        wall = float(np.percentile(perp[finite], 30))
-        far = ~finite | (perp > wall + depth_beyond)
-
-        out = []
-        i = 0
-        n = a.size
-        while i < n:
-            if not far[i]:
-                i += 1
-                continue
-            j = i
-            while j + 1 < n and far[j + 1]:
-                j += 1
-            if i > 0 and j < n - 1 and finite[i - 1] and finite[j + 1]:
-                p1 = np.array([r[i - 1] * math.cos(a[i - 1]), r[i - 1] * math.sin(a[i - 1])])
-                p2 = np.array([r[j + 1] * math.cos(a[j + 1]), r[j + 1] * math.sin(a[j + 1])])
-                width = float(np.linalg.norm(p2 - p1))
-                if width >= min_width:
-                    c = (p1 + p2) / 2.0
-                    edge = p2 - p1
-                    normal = np.array([-edge[1], edge[0]])
-                    if np.dot(normal, c) < 0:
-                        normal = -normal
-                    out.append({'x': float(c[0]), 'y': float(c[1]),
-                                'yaw': math.atan2(normal[1], normal[0]),
-                                'width': width})
-            i = j + 1
-        out.sort(key=lambda g: math.hypot(g['x'], g['y']))
-        return out
+        return _openings(a, r, r * np.abs(np.sin(a)), min_width, depth_beyond)
 
     # ------------------------------------------------------------------ gates
     def find_gates(self, gate_width, tol, post_max_extent=0.15,
@@ -242,3 +217,40 @@ class ScanView:
 def pursuit_curvature(target_angle, target_distance):
     """Pure-pursuit curvature to a point at (angle, distance) in robot frame."""
     return 2.0 * math.sin(target_angle) / max(target_distance, 0.3)
+
+
+def _openings(a, r, dist, min_width, depth_beyond):
+    """Runs of beams reaching depth_beyond past the wall line (``dist`` is each
+    beam's distance measured perpendicular to that wall); closed notches fail."""
+    if a.size < 5:
+        return []
+    finite = np.isfinite(dist)
+    if finite.sum() < 5:
+        return []
+    wall = float(np.percentile(dist[finite], 30))
+    far = ~finite | (dist > wall + depth_beyond)
+    out = []
+    i = 0
+    n = a.size
+    while i < n:
+        if not far[i]:
+            i += 1
+            continue
+        j = i
+        while j + 1 < n and far[j + 1]:
+            j += 1
+        if i > 0 and j < n - 1 and finite[i - 1] and finite[j + 1]:
+            p1 = np.array([r[i - 1] * math.cos(a[i - 1]), r[i - 1] * math.sin(a[i - 1])])
+            p2 = np.array([r[j + 1] * math.cos(a[j + 1]), r[j + 1] * math.sin(a[j + 1])])
+            width = float(np.linalg.norm(p2 - p1))
+            if width >= min_width:
+                c = (p1 + p2) / 2.0
+                edge = p2 - p1
+                normal = np.array([-edge[1], edge[0]])
+                if np.dot(normal, c) < 0:
+                    normal = -normal
+                out.append({'x': float(c[0]), 'y': float(c[1]),
+                            'yaw': math.atan2(normal[1], normal[0]), 'width': width})
+        i = j + 1
+    out.sort(key=lambda g: math.hypot(g['x'], g['y']))
+    return out

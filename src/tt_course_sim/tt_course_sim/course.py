@@ -22,6 +22,7 @@ class Course:
 
     def __init__(self, rails=True, seed=0, hoop_width=0.60):
         self.rng = np.random.default_rng(seed)
+        self.seed = seed
         self.rails = rails
         self.hoop_width = hoop_width
         self.x, self.y, self.yaw = 0.0, 0.0, math.pi       # start heading west
@@ -229,22 +230,26 @@ class Course:
         self.markers.append(('wide',) + self.to_world(0.0, 0.0, A))
         self.patch(0.0, 3.35, -0.7, 7.0, 'wide', base=A)
         self.wall([(0.0, -0.61), (0.0, -0.7), (3.35, -0.7), (3.35, 7.0), (-0.0, 7.0)], base=A)
-        # East wall with a zig-zag decoy (closed notches) and the real gap at v 5.9-6.8
+        # East wall: zig-zag decoy (closed notches); the bucket-field entrance can be
+        # anywhere on the start line (v 3.4-7.0), 0.9 m wide.
+        gap_c = 6.35 if self.seed == 0 else float(self.rng.uniform(3.95, 6.45))
+        self.gap_center = gap_c
         self.wall([(0.0, 0.61), (0.0, 1.0), (0.7, 1.5), (0.0, 2.0), (0.7, 2.5), (0.0, 3.0),
-                   (0.0, 5.9)], base=A)
-        self.wall([(0.0, 6.8), (0.0, 7.0)], base=A)
+                   (0.0, gap_c - 0.45)], base=A)
+        self.wall([(0.0, gap_c + 0.45), (0.0, 7.0)], base=A)
         # West-wall stubs and the V decoy that opens north
         self.wall([(3.35, 2.0), (2.6, 2.0)], base=A)
         self.wall([(3.35, 4.0), (2.7, 4.3)], base=A)
         self.wall([(0.65, 6.2), (1.35, 7.0), (2.6, 6.2)], base=A)
 
         # ---- Bucket field east of the gap: local a = east (-u), b = v
-        self.markers.append(('buckets',) + self.to_world(0.0, 6.35, A))
-        self.waypoints['buckets'] = (*self.to_world(-0.1, 6.35, A), A[2] + math.pi)
+        self.markers.append(('buckets',) + self.to_world(0.0, gap_c, A))
+        self.waypoints['buckets'] = (*self.to_world(-0.1, gap_c, A), A[2] + math.pi)
         self.patch(-3.6, 0.0, 3.4, 7.0, 'buckets', base=A)
         self.wall([(0.0, 3.4), (-3.6, 3.4), (-3.6, 5.5)], base=A)
         self.wall([(-3.6, 6.4), (-3.6, 7.0), (0.0, 7.0)], base=A)
-        for a, b in ((0.9, 4.0), (2.1, 4.0), (3.0, 4.1), (1.2, 6.5), (2.3, 5.4), (2.9, 6.6)):
+        self.buckets = self.place_buckets(gap_c)
+        for a, b in self.buckets:
             self.disc(-a, b, 0.15, 0.37, 'bucket', base=A)
         # 36" connector east to the hoop lane
         self.patch(-4.6, -3.6, 5.5, 6.4, 'hoops', base=A)
@@ -268,11 +273,12 @@ class Course:
         self.patch(5.3, 8.02, -4.52, 0.915, 'hoops', base=H)
         self.patch(-3.2, 5.3, -3.91, -2.69, 'car_wash', base=H)
         hw = self.hoop_width / 2
+        # Hoops anywhere on their dashed lines (legs stay inside the lane).
         for x in (2.44, 4.88):
-            y = float(self.rng.uniform(-0.55, 0.55))
+            y = float(self.rng.uniform(-0.915 + hw + 0.05, 0.915 - hw - 0.05))
             self.disc(x, y + hw, 0.025, 0.9, 'hoop', base=H)
             self.disc(x, y - hw, 0.025, 0.9, 'hoop', base=H)
-        x3 = float(self.rng.uniform(5.9, 7.3))
+        x3 = float(self.rng.uniform(5.3 + hw + 0.1, 5.3 + 2.4 - hw))
         self.disc(x3 - hw, -0.915, 0.025, 0.9, 'hoop', base=H)
         self.disc(x3 + hw, -0.915, 0.025, 0.9, 'hoop', base=H)
         self.hoops = [self.to_world(2.44, 0, H), self.to_world(4.88, 0, H), self.to_world(x3, -0.915, H)]
@@ -284,6 +290,49 @@ class Course:
         fx, fy = self.to_world(-3.0, -3.3, H)
         self.finish = (fx, fy, H[2], 0.2, 0.61)
         self.markers.append(('finish',) + self.to_world(-2.0, -3.3, H))
+
+    # ------------------------------------------------------------ randomisation
+    def place_buckets(self, gap_c, field=(3.6, 3.4, 7.0), exit_b=(5.5, 6.4), clear=0.35):
+        """2-9 buckets (a = depth into field, b = across) with a guaranteed path
+        at least `clear` wide from the entrance gap to the exit. Seed 0 = drawing."""
+        if self.seed == 0:
+            return [(0.9, 4.0), (2.1, 4.0), (3.0, 4.1), (1.2, 6.5), (2.3, 5.4), (2.9, 6.6)]
+        depth, b0, b1 = field
+        need = clear / 2 + 0.15 + 0.10      # half path + bucket radius + truck half width
+        for _ in range(500):
+            n = int(self.rng.integers(2, 10))
+            pts = [(float(self.rng.uniform(0.5, depth - 0.4)), float(self.rng.uniform(b0 + 0.3, b1 - 0.3)))
+                   for _ in range(n)]
+            if any(math.hypot(p[0] - q[0], p[1] - q[1]) < 0.45 for i, p in enumerate(pts) for q in pts[:i]):
+                continue
+            if self._path_exists(pts, gap_c, exit_b, field, need):
+                return pts
+        return [(1.8, b0 + 0.6), (1.8, b1 - 0.6)]
+
+    @staticmethod
+    def _path_exists(pts, gap_c, exit_b, field, need, res=0.05):
+        """Grid flood fill for the truck centre from the entrance to the exit."""
+        depth, b0, b1 = field
+        na, nb = int(depth / res) + 1, int((b1 - b0) / res) + 1
+        free = np.ones((na, nb), dtype=bool)
+        a = np.arange(na)[:, None] * res
+        b = b0 + np.arange(nb)[None, :] * res
+        for pa, pb in pts:
+            free &= np.hypot(a - pa, b - pb) > need
+        free &= (b > b0 + 0.15) & (b < b1 - 0.15)
+        start = [(0, j) for j in range(nb) if abs(b0 + j * res - gap_c) < 0.2 and free[0, j]]
+        goal = {(na - 1, j) for j in range(nb) if exit_b[0] + 0.15 < b0 + j * res < exit_b[1] - 0.15}
+        seen, stack = set(start), list(start)
+        while stack:
+            i, j = stack.pop()
+            if (i, j) in goal:
+                return True
+            for di, dj in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                k = (i + di, j + dj)
+                if 0 <= k[0] < na and 0 <= k[1] < nb and k not in seen and free[k]:
+                    seen.add(k)
+                    stack.append(k)
+        return False
 
     # ------------------------------------------------------------ grids
     def rasterise(self):

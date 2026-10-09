@@ -201,8 +201,9 @@ class WallCenter(Behavior):
 class GapFollow(Behavior):
     """Reactive follow-the-gap with an optional preferred heading.
 
-    params: speed, goal_heading_deg (relative to start), distance, and any
-            gap_follow gain (max_range, bubble_radius, free_range, min_width)
+    params: speed, goal_heading_deg (relative to start) | goal_heading_abs |
+            goal_point [x, y] (odom) + goal_radius (done when that close), distance,
+            and any gap_follow gain (max_range, bubble_radius, free_range, min_width)
     """
     name = 'gap_follow'
 
@@ -213,7 +214,14 @@ class GapFollow(Behavior):
         speed = float(self.p.get('speed', 0.5))
         status = DONE if self.distance_done(ctx) else RUNNING
         goal = None
-        if 'goal_heading_deg' in self.p:
+        if 'goal_point' in self.p:
+            px, py = (float(v) for v in self.p['goal_point'])
+            goal = wrap_angle(math.atan2(py - ctx.odom.y, px - ctx.odom.x) - ctx.odom.yaw)
+            if math.hypot(px - ctx.odom.x, py - ctx.odom.y) < float(self.p.get('goal_radius', 0.0)):
+                status = DONE
+        elif 'goal_heading_abs' in self.p:
+            goal = wrap_angle(float(self.p['goal_heading_abs']) - ctx.odom.yaw)
+        elif 'goal_heading_deg' in self.p:
             goal = wrap_angle(self.start_yaw + float(self.p['goal_heading_deg']) * DEG - ctx.odom.yaw)
         if not ctx.lidar_ok or ctx.scan is None:
             kappa = 0.0 if goal is None else 2.0 * goal
@@ -329,7 +337,8 @@ class ArcTurn(Behavior):
     """Constant-radius turn by heading change, with yaw-rate feedback.
 
     Falls back to a KTurn for the rest of the angle if the front gets blocked.
-    params: turn_deg, direction, radius, speed, allow_kturn,
+    params: turn_deg | heading_abs (absolute end heading), direction, radius,
+            speed, allow_kturn,
             outer_wall_target (lidar side correction, flat ground only),
             center_left + track_radius: hold a circle around a centre that lies
             center_left metres to the turn side of the start pose (helix:
@@ -341,6 +350,9 @@ class ArcTurn(Behavior):
         super().start(ctx)
         self.dir = _direction(self.p.get('direction', 'left'))
         self.goal = abs(float(self.p.get('turn_deg', 90.0))) * DEG
+        if 'heading_abs' in self.p:
+            # Turn (in the given direction) until this absolute heading is reached.
+            self.goal = (self.dir * wrap_angle(float(self.p['heading_abs']) - ctx.odom.yaw)) % (2 * math.pi)
         radius = float(self.p.get('radius', self.cfg.steering.min_turn_radius))
         if radius < self.cfg.steering.min_turn_radius:
             self.warning = (f'radius {radius:.2f} m < vehicle min '
@@ -405,7 +417,8 @@ class BackOff(Behavior):
     def step(self, ctx, dt):
         if self.travelled(ctx) >= float(self.p.get('distance', 0.3)):
             return Command(0.0, 0.0, DONE)
-        if ctx.scan is not None and ctx.lidar_ok and self.cfg.rear(ctx.scan) < 0.2:
+        if (ctx.scan is not None and ctx.lidar_ok
+                and self.cfg.rear(ctx.scan) < self.cfg.rear_overhang + 0.12):
             return Command(0.0, 0.0, DONE, 'rear blocked')
         return Command(-abs(float(self.p.get('speed', 0.3))), float(self.p.get('steer', 0.0)),
                        RUNNING)

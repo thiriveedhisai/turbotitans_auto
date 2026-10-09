@@ -11,7 +11,8 @@ E-stop:
 """
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription
+from launch.actions import (DeclareLaunchArgument, GroupAction, IncludeLaunchDescription,
+                            OpaqueFunction)
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
@@ -22,8 +23,6 @@ from launch_ros.substitutions import FindPackageShare
 def generate_launch_description():
     pkg = FindPackageShare('tt_obstacle_course')
     tuning = LaunchConfiguration('tuning')
-    nav2_params = LaunchConfiguration('nav2_params')
-    use_nav2 = LaunchConfiguration('use_nav2')
     sensors = LaunchConfiguration('sensors')
 
     args = [
@@ -38,6 +37,9 @@ def generate_launch_description():
         DeclareLaunchArgument('camera_nodes', default_value='true',
                               description='Start start_detector and marker_detector'),
         DeclareLaunchArgument('motor', default_value='true', description='Start rc_car_controller'),
+        DeclareLaunchArgument('turn_radius', default_value='',
+                              description='Override the minimum turning radius (m) everywhere; '
+                                          'empty = use tuning.yaml / nav2_params.yaml'),
         # Lidar pose relative to the ZED camera link; keep laser_offset_* in tuning.yaml equal.
         DeclareLaunchArgument('laser_x', default_value='-0.15'),
         DeclareLaunchArgument('laser_y', default_value='0.0'),
@@ -68,9 +70,26 @@ def generate_launch_description():
         parameters=[PathJoinSubstitution([FindPackageShare('rc_car_controller'), 'config', 'params.yaml']),
                     tuning])
 
+    return LaunchDescription(args + [drivers, laser_tf, motor,
+                                     OpaqueFunction(function=_stack_and_nav2)])
+
+
+def _stack_and_nav2(context):
+    pkg = FindPackageShare('tt_obstacle_course')
+    tuning = LaunchConfiguration('tuning')
+    nav2_params = LaunchConfiguration('nav2_params')
+    use_nav2 = LaunchConfiguration('use_nav2')
+    radius = LaunchConfiguration('turn_radius').perform(context).strip()
+    ours, planner, controller = [], [], []
+    if radius:
+        r = float(radius)
+        ours = [{'vehicle.planning_min_turn_radius': r}]
+        planner = [{'GridBased.minimum_turning_radius': r}]
+        controller = [{'FollowPath.AckermannConstraints.min_turning_r': r}]
+
     def tt(exe, extra=(), condition=None):
         return Node(package='tt_obstacle_course', executable=exe, name=exe, output='screen',
-                    parameters=[tuning, *extra], condition=condition)
+                    parameters=[tuning, *ours, *extra], condition=condition)
 
     cameras = IfCondition(LaunchConfiguration('camera_nodes'))
     stack = [
@@ -88,9 +107,9 @@ def generate_launch_description():
     bt_xml = PathJoinSubstitution([pkg, 'config', 'navigate_ackermann.xml'])
     nav2 = GroupAction(condition=IfCondition(use_nav2), actions=[
         Node(package='nav2_controller', executable='controller_server', name='controller_server',
-             output='screen', parameters=[nav2_params]),
+             output='screen', parameters=[nav2_params, *controller]),
         Node(package='nav2_planner', executable='planner_server', name='planner_server',
-             output='screen', parameters=[nav2_params]),
+             output='screen', parameters=[nav2_params, *planner]),
         Node(package='nav2_behaviors', executable='behavior_server', name='behavior_server',
              output='screen', parameters=[nav2_params]),
         Node(package='nav2_bt_navigator', executable='bt_navigator', name='bt_navigator',
@@ -98,5 +117,4 @@ def generate_launch_description():
         Node(package='nav2_lifecycle_manager', executable='lifecycle_manager',
              name='lifecycle_manager_navigation', output='screen', parameters=[nav2_params]),
     ])
-
-    return LaunchDescription(args + [drivers, laser_tf, motor, *stack, nav2])
+    return [*stack, nav2]

@@ -7,7 +7,7 @@ Each zone is a list of steps. A step is one of:
         pose, then a straight blind commit through)
 A step ends when any 'until' trigger fires (default: done):
   done | failed | terrain=X | terrain!=X | left=X | marker=X | distance>=m | time>=s |
-  yaw>=deg | gap=left|right | walls_lost>=m | opening_ahead>=m
+  yaw>=deg | gap=left|right | walls_lost>=m | opening_ahead>=m | corridor<=m
 Guards: after_distance (m), min_time (s). Zone timeout_s moves on regardless.
 Seeing a marker for a zone up to marker_skip_max ahead jumps straight to it.
 """
@@ -31,7 +31,7 @@ from tt_obstacle_course.ros_common import RELIABLE_SUB, TTNode, dumps, odom_upda
 from tt_obstacle_course.ros_common import run as run_node
 from tt_obstacle_course.scan_utils import ScanView
 
-TRIGGER = re.compile(r'^\s*(\w+)\s*(>=|!=|=)?\s*([\w.\-]+)?\s*$')
+TRIGGER = re.compile(r'^\s*(\w+)\s*(>=|<=|!=|=)?\s*([\w.\-]+)?\s*$')
 NO_CAP = 99.0
 
 
@@ -138,6 +138,7 @@ class MissionManager(TTNode):
         self.marker_lead = float(self.mission.get('marker_lead_m', 1.3))
         self.pending_markers = {}
         self.use_nav2 = bool(self.param('use_nav2', True))
+        self.variables = self.compute_variables()
         # Begin at a later zone (practice a section, or resume after a reset).
         self.start_zone = str(self.param('start_zone', ''))
         self.yaw_offset, self.flip = self.scan_args()
@@ -246,13 +247,72 @@ class MissionManager(TTNode):
         self.gate = (self.pose_of(msg), self.now_s())
 
     # ------------------------------------------------------------ commands
+    def compute_variables(self):
+        """Values mission.yaml can reference as "$name" / "-$name"."""
+        radius = float(self.param('vehicle.planning_min_turn_radius', 1.52))
+        h = self.mission.get('helix_entry', {})
+        axle = float(self.mission.get('axle_to_camera', 0.38))
+        # The camera (odometry point) sits ahead of the rear axle, so it circles
+        # wider than the turning radius; shift outward to stay concentric.
+        cam_r = math.hypot(radius, axle)
+        offset = cam_r - float(h.get('centerline', 1.22)) - float(h.get('margin', 0.05))
+        offset = max(0.0, min(float(h.get('max_offset', 0.25)), offset))
+        values = {'helix_offset': round(offset, 3), 'turn_radius': radius, 'axle_to_camera': axle}
+        self.get_logger().info(f'turning radius {radius:.2f} m -> {values}')
+        return values
+
+    def resolve(self, params):
+        out = {}
+        for k, v in params.items():
+            if isinstance(v, str) and v.startswith('$exit') and 'exit_point' not in self.variables:
+                self.compute_exit_point()
+            if isinstance(v, str) and v.lstrip('-').startswith('$'):
+                sign = -1.0 if v.startswith('-') else 1.0
+                name = v.lstrip('-')[1:]
+                if name not in self.variables:
+                    self.get_logger().warn(f'{name} not known yet; dropping param {k}')
+                    continue
+                v = self.variables[name]
+                v = [sign * x for x in v] if isinstance(v, list) else sign * v
+            out[k] = v
+        return out
+
+    def compute_exit_point(self):
+        """Bucket-field exit from fixed field geometry: buckets and the entrance
+        move between runs, the field walls and exit don't. Measured from the
+        entrance gap along its axis, and from the lidar-measured side wall."""
+        if self.last_gap is None:
+            return
+        hint = self.mission.get('exit_hint', {})
+        gx, gy, gyaw = self.last_gap
+        c, s = math.cos(gyaw), math.sin(gyaw)
+        depth = float(hint.get('depth', 4.0))
+        side = -1 if hint.get('wall', 'right') == 'right' else 1
+        lateral = 0.0
+        wall = None
+        if self.scan is not None and self.lidar_ok:
+            wall = self.scan.far_side_wall(side)
+        if wall is not None:
+            rx, ry = self.odom.x - gx, self.odom.y - gy
+            robot_lat = -s * rx + c * ry
+            wall_lat = robot_lat + side * wall
+            lateral = wall_lat - side * float(hint.get('from_wall', 1.05))
+        point = [gx + c * depth - s * lateral, gy + s * depth + c * lateral]
+        lead = float(hint.get('approach', 1.8))
+        self.variables['exit_point'] = point
+        self.variables['exit_approach'] = [point[0] - c * lead, point[1] - s * lead]
+        self.variables['exit_through'] = [point[0] + c * 0.6, point[1] + s * 0.6]
+        self.variables['gap_yaw'] = gyaw
+        self.get_logger().info(f'bucket exit estimate {point[0]:.2f}, {point[1]:.2f} '
+                               f'(side wall {"%.2f m" % wall if wall else "unseen"})')
+
     @property
     def zone(self):
         return self.zones[self.zone_idx]
 
     def send_behavior(self, name, params):
         self.cmd_id += 1
-        self.cmd = {'id': self.cmd_id, 'behavior': name, 'params': params}
+        self.cmd = {'id': self.cmd_id, 'behavior': name, 'params': self.resolve(params)}
         self.pub_cmd.publish(String(data=dumps(self.cmd)))
 
     def republish(self):
@@ -371,6 +431,11 @@ class MissionManager(TTNode):
                 return False
             return min(self.scan.range_at(math.radians(60)),
                        self.scan.range_at(math.radians(-60))) >= float(val)
+        if kind == 'corridor':
+            # Walls on both sides closer together than val (e.g. an exit lane).
+            if not self.lidar_ok or self.scan is None:
+                return False
+            return self.scan.side_distance(+1) + self.scan.side_distance(-1) <= float(val)
         raise ValueError(f'unknown trigger {trigger!r}')
 
     def step_finished(self, now):
@@ -411,7 +476,12 @@ class MissionManager(TTNode):
             return
         if not run.fallback:
             if 'nav2' in run.spec:
-                self.update_nav(run)
+                limit = run.spec['nav2'].get('nav_timeout_s')
+                if limit is not None and run.phase not in ('search', 'turn_in') \
+                        and now - run.t0 > float(limit):
+                    self.nav_failed(run, f'goal not reached in {float(limit):.0f} s')
+                else:
+                    self.update_nav(run)
             elif 'gate' in run.spec:
                 self.update_gate(run, now)
         elif run.spec.get('nav2', {}).get('goal') == 'gap':
@@ -451,21 +521,29 @@ class MissionManager(TTNode):
             self.plan_turn_in(run, side, nav, gap)
 
     def plan_turn_in(self, run, side, nav, gap):
-        """Line up one turning radius before the opening, turn 90 deg, drive in."""
-        gx, gy, _ = gap
+        """Line up so a full-lock turn ends on the opening's axis, turn onto its
+        heading, then follow the line through its centre."""
+        gx, gy, gyaw = gap
         self.last_gap = gap
         fx, _ = self.odom.to_robot(gx, gy)
-        radius = float(nav.get('turn_radius', 1.6))
+        radius = float(nav.get('turn_radius', self.variables['turn_radius']))
         speed = float(nav.get('turn_speed', 0.4))
-        lead = fx - radius
+        # During a 90 deg turn about the rear axle, the camera (odometry point)
+        # advances R - axle_to_camera.
+        lead = fx - (radius - self.variables['axle_to_camera'])
         queue = []
         if lead > 0.05:
             queue.append(('heading_hold', {'speed': speed, 'distance': lead}))
         elif lead < -0.05:
             queue.append(('backoff', {'speed': 0.3, 'distance': -lead}))
-        queue.append(('arc_turn', {'direction': side, 'turn_deg': 90.0, 'speed': speed,
-                                   'allow_kturn': True}))
-        queue.append(('heading_hold', {'speed': speed, 'distance': float(nav.get('inside', 0.8))}))
+        queue.append(('arc_turn', {'direction': side, 'heading_abs': gyaw, 'speed': speed,
+                                   'radius': radius, 'allow_kturn': True}))
+        inside = float(nav.get('inside', 0.0))
+        if inside > 0.0:
+            queue.append(('heading_hold', {'speed': speed, 'heading_abs': gyaw,
+                                           'line_point': [gx, gy], 'max_approach_deg': 30.0,
+                                           'past_point': inside}))
+        self.variables['gap_yaw'] = gyaw
         self.get_logger().info(f'{side} gap {fx:.2f} m ahead: turn-in plan '
                                f'{[q[0] for q in queue]} (lead {lead:+.2f} m)')
         self.nav.cancel()
@@ -589,6 +667,10 @@ class MissionManager(TTNode):
             return
 
         gate = self.next_gate(run, spec)
+        if 'target' in spec:
+            # Fixed gate (e.g. the bucket exit): known point, along the entrance axis.
+            tgt = self.resolve({'t': spec['target']}).get('t')
+            gate = (tgt[0], tgt[1], self.variables.get('gap_yaw', lane_yaw)) if tgt else None
         if gate is not None:
             gx, gy, gyaw = gate
             c, s = math.cos(gyaw), math.sin(gyaw)

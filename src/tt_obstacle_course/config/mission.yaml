@@ -6,6 +6,17 @@
 marker_skip_max: 2           # a marker up to N zones ahead jumps straight there
 marker_skip_min_time_s: 2.0
 marker_lead_m: 1.3           # act on a marker after driving this far (it's seen ahead)
+axle_to_camera: 0.38         # MEASURE rear axle to ZED camera (the odometry point)
+
+# Bucket-field exit relative to the field (fixed on the day; entrance/buckets move):
+# depth = from the entrance line to the exit, from_wall = exit centre from the
+# side wall on the `wall` side. MEASURE on the real course.
+exit_hint: {depth: 4.0, wall: right, from_wall: 1.05, approach: 1.8}
+
+# Helix entry: with a large turning radius the truck must enter toward the
+# helix's outer side to stay concentric. The offset ($helix_offset) is
+# computed from vehicle.planning_min_turn_radius; it is 0 once R <= ~1.2 m.
+helix_entry: {centerline: 1.22, margin: 0.05, max_offset: 0.25}
 
 zones:
   - name: start
@@ -17,17 +28,14 @@ zones:
         until: [terrain=ramp_up, marker=ramp_up]
 
   # 20% straight ramp up to a 25" bridge. Lidar is gated off while tilted, so
-  # this is heading-hold on the direction lined up in the start corridor.
-  # lateral_offset moves the truck right (the helix's outer side) so a 1.52 m
-  # turn stays inside the helix lane. Feasible window at R=1.52 is only
-  # 0.17-0.30 m (ramp rail vs helix outer rail). Set 0 once R is ~1.2 m.
-  # Set it to 0 once the turning radius is ~1.2 m.
+  # this is heading-hold on the direction lined up in the start corridor,
+  # shifted right (helix outer side) by $helix_offset (0.25 m at R=1.52, 0 at R=1.2).
   - name: ramp_up
     speed_cap: 0.9
     timeout_s: 12
     steps:
       - behavior: heading_hold
-        params: {speed: 0.9, lateral_offset: -0.22}
+        params: {speed: 0.9, lateral_offset: -$helix_offset}
         until: [left=ramp_up]
 
   # Turn must start at the bridge end. The zone starts when the IMU sees the
@@ -42,28 +50,25 @@ zones:
         until: [distance>=1.5, terrain=ramp_down]
 
   # 270 deg left helix, ~4 ft centreline radius, 11% down, ~6" rails (90% sure).
-  # At R=1.52 the truck has no steering authority left, so it holds full lock and
-  # relies on the ramp lateral_offset to be near-concentric. Once R <= ~1.3 m,
-  # add {center_left: <1.22 + offset>, track_radius: <~1.3>} to close the loop
-  # on odometry around the helix centre (rails are below the lidar).
+  # Asks for the centreline radius; if the truck can't turn that tight it
+  # holds full lock and relies on $helix_offset to stay near-concentric.
   - name: helix
     speed_cap: 0.5
     timeout_s: 30
     allow_marker_skip: false     # must start exactly at the ramp-down, not early
     steps:
       - behavior: arc_turn
-        params: {direction: left, turn_deg: 270, radius: 1.30, speed: 0.5, allow_kturn: false}
+        params: {direction: left, turn_deg: 270, radius: 1.22, speed: 0.5, allow_kturn: false}
         until: [done]
 
-  # 5 ft tunnel under the bridge, then the 32" x 10 ft corridor. The wide helix
-  # exits ~0.25 m right of the tunnel axis; undo the ramp offset first (set 0
-  # together with the ramp lateral_offset once R is ~1.2 m).
+  # 5 ft tunnel under the bridge, then the 32" x 10 ft corridor. Undo the
+  # entry offset first (the helix exits off the tunnel axis by the same amount).
   - name: tunnel
     speed_cap: 1.0
     timeout_s: 15
     steps:
       - behavior: heading_hold
-        params: {speed: 0.4, lateral_offset: 0.25, distance: 1.3}
+        params: {speed: 0.4, lateral_offset: $helix_offset, distance: 1.3}
       - behavior: wall_center
         params: {speed: 1.0}
         until: [distance>=3.0, marker=narrow]
@@ -137,8 +142,9 @@ zones:
         params: {direction: left, turn_deg: 90, radius: 1.6, speed: 0.6, allow_kturn: true}
         until: [done]
       # Search = follow the left wall (fallback block). On a confirmed opening:
-      # move to one turning radius before it, 90 deg turn, drive in (no Nav2 needed).
-      - nav2: {goal: gap, side: left, inside: 0.8, turn_radius: 1.6, entry: turn_in}
+      # line up, turn onto the opening's axis (from wall geometry), then hand
+      # over to the bucket zone (a bucket may sit right behind the entrance).
+      - nav2: {goal: gap, side: left, entry: turn_in}
         fallback:
           behavior: wall_center
           params: {speed: 0.5, follow: left, wall_target: 0.8}
@@ -150,13 +156,26 @@ zones:
     speed_cap: 0.7
     timeout_s: 60
     steps:
-      # Goal measured from the entrance gap (forward = through it). MEASURE the
-      # exit offset on the real course.
-      - nav2: {goal: relative, frame: gap, forward: 4.0, left: 0.4}
-        fallback:
-          behavior: gap_follow
-          params: {speed: 0.4, goal_heading_deg: 0, goal_heading_gain: 1.0, max_range: 1.5,
-                   free_range: 0.5, bubble_radius: 0.25, min_width: 0.3, distance: 6.0}
+      # Buckets and the entrance move for every run; the field walls and the exit
+      # don't. Follow-the-gap (always obstacle-aware) toward $exit_approach (on the
+      # exit axis, `approach` m before it), then toward $exit_through (just past
+      # the exit). Simulation: ~75% of random layouts at R=1.2-1.52; failures are
+      # layouts needing many reversing points.
+      # Nav2 alternative (struggled with reverse cusps here in simulation):
+      #   - nav2: {goal: relative, frame: gap, forward: 4.0, left: 0.4, nav_timeout_s: 25}
+      # Clear the entrance mouth first; the exit is estimated from inside the field.
+      - behavior: gap_follow
+        params: {speed: 0.4, goal_heading_abs: $gap_yaw, goal_heading_gain: 1.0, max_range: 1.5,
+                 free_range: 0.5, bubble_radius: 0.25, min_width: 0.3, distance: 0.8}
+      - behavior: gap_follow
+        params: {speed: 0.4, goal_point: $exit_approach, goal_radius: 0.5, goal_heading_gain: 1.0,
+                 max_range: 1.5, free_range: 0.5, bubble_radius: 0.25, min_width: 0.3,
+                 distance: 10.0}
+        until: [done, marker=hoops]
+      - behavior: gap_follow
+        params: {speed: 0.4, goal_point: $exit_through, goal_radius: 0.3, goal_heading_gain: 1.0,
+                 max_range: 1.5, free_range: 0.5, bubble_radius: 0.25, min_width: 0.3,
+                 distance: 6.0}
         until: [done, marker=hoops]
 
   # Two hoops 96" apart in a 72" lane, a right U-turn with a third hoop, then
@@ -176,14 +195,14 @@ zones:
         params: {direction: right, turn_deg: 90, radius: 1.6, speed: 0.6, allow_kturn: true}
 
   # Ribbons fool both sensors: ignore the front cone, hold heading, go fast.
-  # Ends on distance only, so the finish marker can't stop us short of the line.
+  # Ends on distance only (overshooting the line costs nothing; stopping short does).
   - name: car_wash
     speed_cap: 1.8
     timeout_s: 15
     steps:
       - behavior: heading_hold
         params: {speed: 1.8, center_gain: 0.5, center_max_width: 1.6, ignore_front_deg: 60,
-                 distance: 5.0}
+                 distance: 9.0}
         until: [done]
 
   - name: finish

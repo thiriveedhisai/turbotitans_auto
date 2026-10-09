@@ -6,6 +6,7 @@ seconds instead of a full ROS run.
 
   python3 -m tt_course_sim.offline narrow           # run a named scenario
   python3 -m tt_course_sim.offline all              # run every scenario
+  python3 -m tt_course_sim.offline all --radius=1.2 # what-if turning radius
 """
 
 import math
@@ -85,15 +86,19 @@ class Truck:
         return True
 
 
-def run(course, pose, behavior, params, max_s=40.0, radius=1.52, z=0.0, verbose=False):
+def run(course, pose, behavior, params, max_s=40.0, radius=None, z=0.0, verbose=False, truck=None):
     shared, ex, gov = load_tuning()
-    veh = shared['vehicle']
+    veh = dict(shared['vehicle'])
+    if radius is None:
+        radius = veh['planning_min_turn_radius']
+    veh['planning_min_turn_radius'] = radius
     cfg = Config(SteeringModel(veh['planning_min_turn_radius'], veh['max_steer_cmd']),
                  {k: ex[k] for k in ('heading_hold', 'wall_center', 'gap_follow', 'arc_turn',
                                      'k_turn')},
                  half_width=veh['width'] / 2, sweep_margin=ex.get('sweep_margin', 0.15),
                  front_overhang=veh['lidar_to_front'], rear_overhang=veh['lidar_to_rear'])
-    truck = Truck(course, *pose, radius=radius, z=z)
+    truck = truck or Truck(course, *pose, radius=radius, z=z)
+    t_end = truck.t + max_s
     beh = make_behavior(behavior, params, cfg)
     stuck = StuckMonitor(**{k: ex['stuck'][k] for k in ('min_speed', 'time_s',
                                                          'backoff_distance', 'max_retries')})
@@ -104,7 +109,7 @@ def run(course, pose, behavior, params, max_s=40.0, radius=1.52, z=0.0, verbose=
     cmd = None
     out_steer = 0.0
     steer_rate = gov['steer_rate_limit']
-    while truck.t < max_s and not truck.fell:
+    while truck.t < t_end and not truck.fell:
         if truck.t - last_scan >= 0.1:
             scan, last_scan = truck.scan(), truck.t
         if int(truck.t * 100) % 5 == 0 or cmd is None:
@@ -162,9 +167,11 @@ SCENARIOS = {
     'wide_turn': (lambda c: c.waypoint('wide'), 'arc_turn',
                   {'direction': 'left', 'turn_deg': 90, 'radius': 1.6, 'speed': 0.6,
                    'allow_kturn': True}, 'done'),
+    # Same parameters as the buckets fallback in mission.yaml.
     'buckets': (lambda c: c.waypoint('buckets'), 'gap_follow',
-                {'speed': 0.4, 'goal_heading_deg': 0, 'max_range': 1.5, 'free_range': 0.5,
-                 'bubble_radius': 0.25, 'min_width': 0.3, 'distance': 5.5}, 'done'),
+                {'speed': 0.4, 'goal_heading_deg': 0, 'goal_heading_gain': 1.0, 'max_range': 1.5,
+                 'free_range': 0.5, 'bubble_radius': 0.25, 'min_width': 0.3, 'distance': 6.0},
+                'done'),
 }
 
 
@@ -192,6 +199,11 @@ ENDS = {'bank_uturn': _in_return_lane, 'narrow': _through_narrow, 'buckets': _th
 
 
 def main(argv):
+    radius = None
+    for a in list(argv):
+        if a.startswith('--radius='):
+            radius = float(a.split('=', 1)[1])
+            argv.remove(a)
     names = list(SCENARIOS) if not argv or argv[0] == 'all' else argv
     course = Course()
     ok = True
@@ -199,7 +211,7 @@ def main(argv):
         pose_fn, beh, params, want = SCENARIOS[name]
         pose = pose_fn(course)
         status, truck = run(course, pose[:3], beh, params, z=pose[3] if len(pose) > 3 else 0.0,
-                            verbose=True)
+                            radius=radius, verbose=True)
         good = status == want and truck.collisions == 0
         check = ENDS.get(name)
         if check:

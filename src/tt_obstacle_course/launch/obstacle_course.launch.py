@@ -32,7 +32,12 @@ def generate_launch_description():
         DeclareLaunchArgument('nav2_params',
                               default_value=PathJoinSubstitution([pkg, 'config', 'nav2_params.yaml'])),
         DeclareLaunchArgument('use_nav2', default_value='true'),
+        DeclareLaunchArgument('start_zone', default_value='',
+                              description='Begin the mission at this zone (practice)'),
         DeclareLaunchArgument('sensors', default_value='true', description='Start ZED and lidar drivers'),
+        DeclareLaunchArgument('camera_nodes', default_value='true',
+                              description='Start start_detector and marker_detector'),
+        DeclareLaunchArgument('motor', default_value='true', description='Start rc_car_controller'),
         # Lidar pose relative to the ZED camera link; keep laser_offset_* in tuning.yaml equal.
         DeclareLaunchArgument('laser_x', default_value='-0.15'),
         DeclareLaunchArgument('laser_y', default_value='0.0'),
@@ -59,23 +64,25 @@ def generate_launch_description():
 
     motor = Node(
         package='rc_car_controller', executable='rc_car_controller_node', name='rc_car_controller',
-        output='screen',
+        output='screen', condition=IfCondition(LaunchConfiguration('motor')),
         parameters=[PathJoinSubstitution([FindPackageShare('rc_car_controller'), 'config', 'params.yaml']),
                     tuning])
 
-    def tt(exe, extra=()):
+    def tt(exe, extra=(), condition=None):
         return Node(package='tt_obstacle_course', executable=exe, name=exe, output='screen',
-                    parameters=[tuning, *extra])
+                    parameters=[tuning, *extra], condition=condition)
 
+    cameras = IfCondition(LaunchConfiguration('camera_nodes'))
     stack = [
         tt('terrain_monitor'),
-        tt('start_detector'),
-        tt('marker_detector'),
+        tt('start_detector', condition=cameras),
+        tt('marker_detector', condition=cameras),
         tt('course_perception'),
         tt('behavior_executor'),
         tt('twist_to_ackermann'),
         tt('speed_governor'),
-        tt('mission_manager', [{'mission_file': LaunchConfiguration('mission'), 'use_nav2': use_nav2}]),
+        tt('mission_manager', [{'mission_file': LaunchConfiguration('mission'), 'use_nav2': use_nav2,
+                                'start_zone': LaunchConfiguration('start_zone')}]),
     ]
 
     bt_xml = PathJoinSubstitution([pkg, 'config', 'navigate_ackermann.xml'])

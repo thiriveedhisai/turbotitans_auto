@@ -40,15 +40,21 @@ class Config:
     gains: dict = field(default_factory=dict)
     half_width: float = 0.10     # vehicle half width (m)
     sweep_margin: float = 0.15   # extra strip width for blocked checks while turning
+    front_overhang: float = 0.20  # lidar to front bumper (m)
+    rear_overhang: float = 0.30   # lidar to rear bumper (m)
+    odom_to_front: float = 0.05   # odometry point (camera) to front bumper
+    odom_to_rear: float = 0.45    # odometry point (camera) to rear bumper
 
     def g(self, group, key, default):
         return self.gains.get(group, {}).get(key, default)
 
     def front(self, scan):
-        return scan.corridor_clearance(self.half_width + self.sweep_margin, forward=True)
+        return scan.corridor_clearance(self.half_width + self.sweep_margin, True,
+                                       min_x=self.front_overhang)
 
     def rear(self, scan):
-        return scan.corridor_clearance(self.half_width + self.sweep_margin, forward=False)
+        return scan.corridor_clearance(self.half_width + self.sweep_margin, False,
+                                       min_x=self.rear_overhang)
 
 
 def _direction(value):
@@ -98,7 +104,9 @@ class HeadingHold(Behavior):
     """Drive at a fixed heading, optionally nudged to the corridor centre.
 
     params: speed, heading_offset_deg | heading_abs, center_gain,
-            center_max_width, distance
+            center_max_width, distance, lateral_offset (m, + left of the start
+            line), line_point [x, y] (follow the line through this odom point
+            instead), past_point (done once this far past line_point)
     """
     name = 'heading_hold'
 
@@ -108,11 +116,28 @@ class HeadingHold(Behavior):
             self.target = float(self.p['heading_abs'])
         else:
             self.target = wrap_angle(ctx.odom.yaw + float(self.p.get('heading_offset_deg', 0.0)) * DEG)
+        self.origin = (ctx.odom.x, ctx.odom.y)
+        if 'line_point' in self.p:
+            # Follow an absolute line (e.g. through a hoop centre) instead of the start pose.
+            self.origin = tuple(float(v) for v in self.p['line_point'])
+            self.p.setdefault('lateral_offset', 0.0)
+
+    def along(self, ctx):
+        c, s = math.cos(self.target), math.sin(self.target)
+        return c * (ctx.odom.x - self.origin[0]) + s * (ctx.odom.y - self.origin[1])
 
     def step(self, ctx, dt):
         kp = self.cfg.g('heading_hold', 'kp', 2.0)
         kd = self.cfg.g('heading_hold', 'kd', 0.1)
-        err = wrap_angle(self.target - ctx.odom.yaw)
+        target = self.target
+        if 'lateral_offset' in self.p:
+            # Shift sideways off the start line (+ left) using odometry only.
+            c, s = math.cos(self.target), math.sin(self.target)
+            lat = -s * (ctx.odom.x - self.origin[0]) + c * (ctx.odom.y - self.origin[1])
+            e = float(self.p['lateral_offset']) - lat
+            cap = float(self.p.get('max_approach_deg', 20.0)) * DEG
+            target = wrap_angle(self.target + max(-cap, min(cap, 1.2 * e)))
+        err = wrap_angle(target - ctx.odom.yaw)
         kappa = kp * err - kd * ctx.odom.yaw_rate
         gain = float(self.p.get('center_gain', 0.0))
         if gain > 0.0 and ctx.lidar_ok and ctx.scan is not None:
@@ -121,6 +146,8 @@ class HeadingHold(Behavior):
             if dl + dr < float(self.p.get('center_max_width', 1.5)):
                 kappa += gain * (dl - dr) / 2.0
         status = DONE if self.distance_done(ctx) else RUNNING
+        if 'past_point' in self.p and self.along(ctx) >= float(self.p['past_point']):
+            status = DONE
         return Command(float(self.p.get('speed', 0.5)), self.steer_for(kappa), status)
 
 
@@ -174,9 +201,13 @@ class WallCenter(Behavior):
 class GapFollow(Behavior):
     """Reactive follow-the-gap with an optional preferred heading.
 
-    params: speed, goal_heading_deg (relative to start), distance
+    params: speed, goal_heading_deg (relative to start), distance, and any
+            gap_follow gain (max_range, bubble_radius, free_range, min_width)
     """
     name = 'gap_follow'
+
+    def _gain(self, key, default):
+        return float(self.p.get(key, self.cfg.g('gap_follow', key, default)))
 
     def step(self, ctx, dt):
         speed = float(self.p.get('speed', 0.5))
@@ -188,12 +219,12 @@ class GapFollow(Behavior):
             kappa = 0.0 if goal is None else 2.0 * goal
             return Command(speed * 0.5, self.steer_for(kappa), status, 'no_lidar')
         target = ctx.scan.follow_gap(
-            max_range=self.cfg.g('gap_follow', 'max_range', 3.0),
-            bubble_radius=self.cfg.g('gap_follow', 'bubble_radius', 0.30),
-            free_range=self.cfg.g('gap_follow', 'free_range', 0.8),
+            max_range=self._gain('max_range', 3.0),
+            bubble_radius=self._gain('bubble_radius', 0.20),
+            free_range=self._gain('free_range', 0.8),
             goal_angle=goal,
-            goal_gain=self.cfg.g('gap_follow', 'goal_heading_gain', 0.4),
-            min_width=self.cfg.g('gap_follow', 'min_width', 0.35))
+            goal_gain=self._gain('goal_heading_gain', 0.4),
+            min_width=self._gain('min_width', 0.35))
         if target is None:
             return Command(0.0, 0.0, status, 'no_gap')
         angle, depth = target
@@ -205,7 +236,11 @@ class KTurn(Behavior):
     """Multi-point turn: forward at full lock, reverse at opposite lock, repeat.
 
     params: turn_deg, direction (left/right), leg_speed, leg_max_distance,
-            front_clearance, rear_clearance, heading_tolerance_deg, max_legs
+            rev_leg_max_distance, front_clearance, rear_clearance,
+            heading_tolerance_deg, max_legs,
+            bounds: [u_min, u_max, v_min, v_max] box in the start frame (u ahead,
+            v left) the bumpers must stay in; odometry only, for areas the
+            lidar can't judge (the 8.5 deg bank)
     """
     name = 'k_turn'
 
@@ -219,18 +254,41 @@ class KTurn(Behavior):
         self.leg = +1
         self.leg_start = ctx.odom.distance
         self.pause_until = ctx.t
+        self.frame = (ctx.odom.x, ctx.odom.y, ctx.odom.yaw)
+        self.bounds = self.p.get('bounds')
         if self._front_blocked(ctx):
             self._switch(ctx)
 
     def _get(self, key, default):
         return float(self.p.get(key, self.cfg.g('k_turn', key, default)))
 
+    def _outside(self, ctx, forward):
+        if not self.bounds:
+            return False
+        u0, u1, v0, v1 = (float(b) for b in self.bounds)
+        x0, y0, yaw0 = self.frame
+        h = ctx.odom.yaw
+        reach = self.cfg.odom_to_front + 0.05 if forward else -(self.cfg.odom_to_rear + 0.05)
+        for side in (-self.cfg.half_width, self.cfg.half_width):
+            px = ctx.odom.x + reach * math.cos(h) - side * math.sin(h)
+            py = ctx.odom.y + reach * math.sin(h) + side * math.cos(h)
+            dx, dy = px - x0, py - y0
+            u = dx * math.cos(yaw0) + dy * math.sin(yaw0)
+            v = -dx * math.sin(yaw0) + dy * math.cos(yaw0)
+            if not (u0 <= u <= u1 and v0 <= v <= v1):
+                return True
+        return False
+
     def _front_blocked(self, ctx):
+        if self._outside(ctx, True):
+            return True
         if ctx.scan is None or not ctx.lidar_ok:
             return False
         return self.cfg.front(ctx.scan) < self._get('front_clearance', 0.35)
 
     def _rear_blocked(self, ctx):
+        if self._outside(ctx, False):
+            return True
         if ctx.scan is None or not ctx.lidar_ok:
             return False
         return self.cfg.rear(ctx.scan) < self._get('rear_clearance', 0.30)
@@ -258,8 +316,9 @@ class KTurn(Behavior):
             return Command(0.0, steer, RUNNING, 'settling')
         leg_len = ctx.odom.distance - self.leg_start
         leg_max = self._get('leg_max_distance', 0.6)
+        rev_max = self._get('rev_leg_max_distance', leg_max)
         if ((self.leg > 0 and (self._front_blocked(ctx) or leg_len >= leg_max))
-                or (self.leg < 0 and (self._rear_blocked(ctx) or leg_len >= leg_max))):
+                or (self.leg < 0 and (self._rear_blocked(ctx) or leg_len >= rev_max))):
             self._switch(ctx)
             return Command(0.0, self.cfg.steering.full_lock(self.dir * self.leg), RUNNING, 'settling')
         speed = self.leg * self._get('leg_speed', 0.4)
@@ -271,7 +330,10 @@ class ArcTurn(Behavior):
 
     Falls back to a KTurn for the rest of the angle if the front gets blocked.
     params: turn_deg, direction, radius, speed, allow_kturn,
-            outer_wall_target (lidar side correction, flat ground only)
+            outer_wall_target (lidar side correction, flat ground only),
+            center_left + track_radius: hold a circle around a centre that lies
+            center_left metres to the turn side of the start pose (helix:
+            no visible walls, so odometry is the only lateral reference)
     """
     name = 'arc_turn'
 
@@ -289,6 +351,21 @@ class ArcTurn(Behavior):
         self.turned = 0.0
         self.prev_yaw = ctx.odom.yaw
         self.kturn = None
+        self.centre = None
+        if 'center_left' in self.p:
+            d = float(self.p['center_left']) * self.dir
+            self.centre = (ctx.odom.x - math.sin(ctx.odom.yaw) * d,
+                           ctx.odom.y + math.cos(ctx.odom.yaw) * d)
+            self.track_r = float(self.p.get('track_radius', radius))
+
+    def circle_curvature(self, ctx):
+        dx, dy = ctx.odom.x - self.centre[0], ctx.odom.y - self.centre[1]
+        r = math.hypot(dx, dy)
+        tangent = math.atan2(dy, dx) + self.dir * math.pi / 2
+        e_r = r - self.track_r              # > 0: outside the circle, tighten
+        e_h = wrap_angle(tangent - ctx.odom.yaw)
+        return (self.dir / self.track_r + self.dir * self.cfg.g('arc_turn', 'radius_gain', 2.0) * e_r
+                + self.cfg.g('arc_turn', 'tangent_gain', 1.5) * e_h)
 
     def step(self, ctx, dt):
         if self.kturn is not None:
@@ -309,6 +386,8 @@ class ArcTurn(Behavior):
             return Command(0.0, 0.0, RUNNING, 'blocked -> k_turn')
 
         v = max(abs(ctx.odom.speed), 0.2)
+        if self.centre is not None:
+            return Command(speed, self.steer_for(self.circle_curvature(ctx)), RUNNING)
         kp = self.cfg.g('arc_turn', 'yaw_rate_kp', 0.8)
         kappa = self.kappa + kp * (self.kappa * v - ctx.odom.yaw_rate) / v
         outer = self.p.get('outer_wall_target')
@@ -320,7 +399,7 @@ class ArcTurn(Behavior):
 
 
 class BackOff(Behavior):
-    """Reverse straight for a distance (stuck recovery)."""
+    """Reverse for a distance (stuck recovery), optionally with a steering angle."""
     name = 'backoff'
 
     def step(self, ctx, dt):
@@ -328,7 +407,8 @@ class BackOff(Behavior):
             return Command(0.0, 0.0, DONE)
         if ctx.scan is not None and ctx.lidar_ok and self.cfg.rear(ctx.scan) < 0.2:
             return Command(0.0, 0.0, DONE, 'rear blocked')
-        return Command(-abs(float(self.p.get('speed', 0.3))), 0.0, RUNNING)
+        return Command(-abs(float(self.p.get('speed', 0.3))), float(self.p.get('steer', 0.0)),
+                       RUNNING)
 
 
 REGISTRY = {cls.name: cls for cls in
@@ -381,7 +461,9 @@ class StuckMonitor:
         self.progress_from = ctx.odom.distance
         if self.retries > self.max_retries:
             return False
-        self.backoff = BackOff({'distance': self.backoff_distance}, cfg)
+        # Reverse with opposite lock: the nose swings toward where it was steering.
+        steer = -cfg.steering.full_lock(cmd.steer) if abs(cmd.steer) > 0.05 else 0.0
+        self.backoff = BackOff({'distance': self.backoff_distance, 'steer': steer}, cfg)
         self.backoff.start(ctx)
         return True
 

@@ -17,6 +17,8 @@
       length: 0.50
       height: 0.25
       ground_clearance: 0.076
+      lidar_to_front: 0.20             # MEASURE lidar centre to front bumper
+      lidar_to_rear: 0.30              # MEASURE lidar centre to rear bumper
       # Re-measure after the servo power fix; the helix needs <= ~1.5 m.
       planning_min_turn_radius: 1.52
       max_steer_cmd: 0.5               # must equal rc_car_controller max_steering_angle

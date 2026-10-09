@@ -56,16 +56,18 @@ class ScanView:
         r = self.ranges[m]
         return float(r.min()) if r.size else math.inf
 
-    def corridor_clearance(self, half_width, forward=True, ignore_half_angle=0.0):
+    def corridor_clearance(self, half_width, forward=True, ignore_half_angle=0.0, min_x=0.0):
         """Distance to the nearest point inside the straight strip the vehicle
         would sweep (|y| <= half_width), ahead or behind. Side walls outside
-        the strip are ignored, unlike an angular cone."""
+        the strip are ignored, unlike an angular cone. Points closer than min_x
+        (alongside the body, behind the bumper) are ignored: stopping can't help."""
         m = np.isfinite(self.ranges)
         if ignore_half_angle > 0.0:
             m &= np.abs(self.angles) > ignore_half_angle
         a, r = self.angles[m], self.ranges[m]
         x, y = r * np.cos(a), r * np.sin(a)
-        sel = (np.abs(y) <= half_width) & ((x > 0) if forward else (x < 0))
+        ahead = (x > min_x) if forward else (x < -min_x)
+        sel = (np.abs(y) <= half_width) & ahead
         return float(np.abs(x[sel]).min()) if sel.any() else math.inf
 
     def range_at(self, angle, half_window=3 * DEG):
@@ -153,14 +155,19 @@ class ScanView:
 
     # ------------------------------------------------------------------ gates
     def find_gates(self, gate_width, tol, post_max_extent=0.15,
-                   cluster_gap=0.10, max_range=3.5, half_fov=70 * DEG):
-        """Pairs of thin posts ``gate_width`` apart in front (hoop legs)."""
+                   cluster_gap=0.10, max_range=3.5, half_fov=70 * DEG, isolation=0.25):
+        """Pairs of thin, free-standing posts ``gate_width`` apart in front (hoop legs).
+
+        A post must have no other returns within ``isolation`` m (apart from its
+        partner), which rejects wall corners and bale ends.
+        """
         a, r = self.sector(-half_fov, half_fov)
         m = np.isfinite(r) & (r <= max_range)
         a, r = a[m], r[m]
         if a.size == 0:
             return []
         xs, ys = r * np.cos(a), r * np.sin(a)
+        allx, ally = self.points()
         clusters = []
         start = 0
         for k in range(1, a.size + 1):
@@ -170,17 +177,27 @@ class ScanView:
                 if extent <= post_max_extent:
                     clusters.append((float(cx.mean()), float(cy.mean())))
                 start = k
+
+        def isolated(p, partner):
+            d_p = np.hypot(allx - p[0], ally - p[1])
+            d_q = np.hypot(allx - partner[0], ally - partner[1])
+            near = (d_p > post_max_extent / 2 + 0.03) & (d_p < isolation) & (d_q > 0.08)
+            return not near.any()
+
         gates = []
         for i in range(len(clusters)):
             for j in range(i + 1, len(clusters)):
                 (x1, y1), (x2, y2) = clusters[i], clusters[j]
                 d = math.hypot(x2 - x1, y2 - y1)
-                if abs(d - gate_width) <= tol:
-                    cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
-                    nx, ny = -(y2 - y1), x2 - x1
-                    if nx * cx + ny * cy < 0:
-                        nx, ny = -nx, -ny
-                    gates.append({'x': cx, 'y': cy, 'yaw': math.atan2(ny, nx), 'width': d})
+                if abs(d - gate_width) > tol:
+                    continue
+                if not (isolated(clusters[i], clusters[j]) and isolated(clusters[j], clusters[i])):
+                    continue
+                cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+                nx, ny = -(y2 - y1), x2 - x1
+                if nx * cx + ny * cy < 0:
+                    nx, ny = -nx, -ny
+                gates.append({'x': cx, 'y': cy, 'yaw': math.atan2(ny, nx), 'width': d})
         gates.sort(key=lambda g: math.hypot(g['x'], g['y']))
         return gates
 

@@ -35,6 +35,8 @@ class SpeedGovernor(TTNode):
         self.steer_rate = float(p('steer_rate_limit', 3.0))
         self.front_half = float(p('front_half_angle_deg', 35.0)) * DEG
         self.corridor = float(p('vehicle.width', 0.20)) / 2.0 + float(p('corridor_margin', 0.08))
+        self.front_overhang = float(p('vehicle.lidar_to_front', 0.20))
+        self.rear_overhang = float(p('vehicle.lidar_to_rear', 0.30))
         self.slow_d = float(p('slow_distance', 0.8))
         self.stop_d = float(p('stop_distance', 0.33))
         self.rear_stop_d = float(p('rear_stop_distance', 0.33))
@@ -110,10 +112,11 @@ class SpeedGovernor(TTNode):
             if v > 0:
                 # front_half_angle_deg only defines how wide the car-wash blind cone may get.
                 if self.ignore_front < self.front_half:
-                    d = self.scan.corridor_clearance(self.corridor, True, self.ignore_front)
+                    d = self.scan.corridor_clearance(self.corridor, True, self.ignore_front,
+                                                     min_x=self.front_overhang)
                     v = self.collision_cap(v, d, self.stop_d)
             elif v < 0:
-                d = self.scan.corridor_clearance(self.corridor, False)
+                d = self.scan.corridor_clearance(self.corridor, False, min_x=self.rear_overhang)
                 v = -self.collision_cap(-v, d, self.rear_stop_d)
         return v
 

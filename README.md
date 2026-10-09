@@ -18,6 +18,8 @@ Branches:
 |---|---|
 | `rc_car_controller` | `AckermannDrive` -> PCA9685 PWM (servo + ESC). Speed calibration table, ESC double-tap reverse, closed-loop speed on ZED odometry, steering trim. Keyboard teleop. |
 | `tt_obstacle_course` | The obstacle-course autonomy: mission manager, perception, behaviors, Nav2 integration, speed governor. |
+| `tt_course_sim` | 2.5-D course simulator + offline section harness for testing the stack without hardware (section 6a). |
+| `docker/` | Lean ROS 2 Jazzy + Nav2 image and `run_sim.sh`. |
 | `turbo_titans_bringup` | Speed-course bringup (camera + lidar + controller + teleop). |
 | `sllidar_ros2` | Submodule: Slamtec RPLidar driver. |
 | `zed-ros2-wrapper`, `zed-ros2-examples` | Submodules: Stereolabs ZED driver (pinned to `v5.4.1`). |
@@ -171,26 +173,73 @@ One number, `vehicle.planning_min_turn_radius`, drives everything:
 
 | # | Zone | Strategy | Ends when |
 |---|---|---|---|
-| 1 | start | Wait for green, centre in 32" lane | IMU sees ramp up |
-| 2 | ramp_up | Heading-hold up the 20% ramp (lidar gated off) | No longer climbing |
-| 3 | bridge | Slow heading-hold across the 25" bridge | IMU sees ramp down |
-| 4 | helix | 270 deg left arc, R=1.30 m, yaw-rate feedback | 265 deg turned |
-| 5 | tunnel | Wall-centre through tunnel + 10 ft corridor | 4.3 m or narrow marker |
-| 6 | narrow | Wall-centre 20" straight + 28" right curve | 75 deg turned / rough / marker |
-| 7 | gravel | Steady straight heading-hold, light centring | 4.0 m |
-| 8 | bank_approach | Wall-centre up the funnel | Walls lost or IMU bank |
-| 9 | bank_uturn | 180 deg right arc on the 8.5 deg bank (k-turn fallback) | 175 deg turned |
-| 10 | pothole | Wall-centre 96" lane, then straight heading-hold | Distance |
-| 11 | wide | 90 deg left, Nav2 search along the LEFT wall, enter the real opening | Inside the opening |
-| 12 | buckets | Nav2 goal across the field (gap-follow fallback) | Goal reached / hoops marker |
-| 13 | hoops | Gate, gate, 90 deg right, gate, 90 deg right. Each gate: Nav2 to 1 m before, then blind straight commit | All steps done |
+| 1 | start | Wait for green, centre in 32" lane | IMU sees ramp up / ramp marker |
+| 2 | ramp_up | Heading-hold up the 20% ramp, shifting 0.22 m right (helix outer side) on odometry | IMU: left the ramp |
+| 3 | bridge | Slow heading-hold | bridge distance (IMU ramp-down as backup) |
+| 4 | helix | 270 deg left at full lock (circle tracking available once R <= ~1.3 m) | 265 deg turned |
+| 5 | tunnel | Shift back 0.25 m left, then wall-centre | distance / narrow marker |
+| 6 | narrow | Follow-the-gap (short horizon) through 20" straight + 28" right curve | 75 deg turned / rough / marker |
+| 7 | gravel | Wall-centre | 4.0 m |
+| 8 | bank_approach | Wall-centre | Opening ahead (lane walls end) |
+| 9 | bank_uturn | 180 deg right **bounded k-turn**: odometry box from the bank geometry (lidar is blind when tilted) | 170 deg turned |
+| 10 | pothole | Wall-centre 96" lane, then wall-centre over the holes | rough / distance |
+| 11 | wide | 90 deg left, follow the LEFT wall, on a real opening: go/back to one turning radius before it, 90 deg turn-in | Inside the opening |
+| 12 | buckets | Nav2 goal anchored to the entrance gap (gap-follow fallback) | Goal / hoops marker |
+| 13 | hoops | Gate, gate, 90 deg right, gate, 90 deg right. Each gate: follow the line through its centre, backing up first if too close for the sideways shift | All steps done |
 | 14 | car_wash | Fast heading-hold, front lidar ignored (ribbons) | 5.0 m |
 | 15 | finish | Stop | - |
 
 Triggers available in `until:`: `done`, `failed`, `terrain=X`, `terrain!=X`,
-`marker=X`, `distance>=m`, `time>=s`, `yaw>=deg`, `gap=left|right`,
-`walls_lost>=m`. Guards: `after_distance`, `min_time`, per-step `timeout_s`,
-per-zone `timeout_s`, `allow_marker_skip`.
+`left=X` (was in terrain X during the step, now isn't), `marker=X`,
+`distance>=m`, `time>=s`, `yaw>=deg`, `gap=left|right`, `walls_lost>=m`,
+`opening_ahead>=m`. Guards: `after_distance`, `min_time`, per-step
+`timeout_s`, per-zone `timeout_s`, `allow_marker_skip`.
+
+Markers are seen up to 1.5 m ahead, so the mission acts on them only after
+driving `marker_lead_m` (1.3 m), never cuts a Nav2/gate manoeuvre short, and
+can't jump into the bridge, helix, bank U-turn or finish.
+
+`start_zone:=<zone>` (launch argument) starts the mission at any zone - for
+practising one section on the real course, or resuming after a reset.
+
+---
+
+## 6a. Simulator (`tt_course_sim`)
+
+A 2.5-D model of the whole course built from the drawing (walls, 20% ramp,
+bridge over the tunnel, helix with optional 6" rails, gravel/pothole
+vibration, 8.5 deg bank, V decoy and zig-zag notches, buckets, hoops, car-wash
+ribbon noise). The lidar is ray-marched through it, so tilted scans hit the
+floor exactly like the real 2-D lidar. The truck is a rear-axle bicycle model
+with the real 1.52 m turning radius, servo lag and slope drag; ZED odometry
+drifts. It runs the **real stack unchanged** (all nodes + Nav2), scores the run
+(finish/fall/stuck, collisions, time) and writes `result.json`,
+`trajectory.csv` and `run.png`.
+
+Runs in Docker (ROS 2 Jazzy, no sudo, nothing installed on the host):
+
+```bash
+docker/run_sim.sh full                         # whole course, with Nav2
+docker/run_sim.sh nonav use_nav2:=false        # fallbacks only
+docker/run_sim.sh norails rails:=false seed:=3 # helix without rails, other hoop layout
+docker/run_sim.sh wide start_zone:=wide        # start at a section
+docker/run_sim.sh r12 true_min_turn_radius:=1.2  # what-if: steering fixed
+# results: /tmp/simout/<name>/run.png, result.json; log: /tmp/simout/<name>.log
+```
+
+Fast section tuning without ROS (seconds per run, same course, behaviors and
+governor collision strip):
+
+```bash
+docker run --rm -v $PWD:/ws -w /ws tt-sim bash -c \
+  "PYTHONPATH=src/tt_course_sim:src/tt_obstacle_course python3 -m tt_course_sim.offline all"
+```
+
+Preview the course: `python3 -m tt_course_sim.course course.png` (in the container).
+
+A full 3-D Gazebo world (camera, AprilTags, real ramps) is the next step once
+the 2-D sim passes end to end; it adds the camera-only parts (start light,
+markers, helix rail detection) that the 2-D sim fakes.
 
 ---
 
@@ -291,10 +340,24 @@ AprilTag `tag36h11`, IDs 0-11 mapped to zones in `tuning.yaml`
 - Motor controller: table/linear mapping, deadband, feedback never flips
   direction, ESC double-tap sequence.
 - All node modules import; launch, mission, tuning, Nav2 params and BT XML parse.
+- **Built and run under real ROS 2 Jazzy + Nav2** (Docker) against the 2-D
+  course simulator, ~25 full-stack runs. This found and fixed bugs that
+  offline checks could not: a method name shadowing rclpy's `Node.context`
+  (executor crashed at start), early marker sightings switching zones 1.5 m
+  too soon, a terrain trigger firing before the ramp was reached, Nav2
+  inflation below the robot radius, side walls deadlocking the collision
+  strip, `wall_center` under-steering tight curves, gate false positives from
+  wall corners, and Nav2 being unable to make reverse cusps in narrow spaces
+  (replaced by geometric manoeuvres: gap turn-in, bounded bank k-turn, gate
+  line-approach with computed back-up).
+- Section results in simulation at R = 1.52 m (offline harness, all pass
+  except buckets): tunnel, narrow + curve, gravel, bank approach, bank U-turn
+  (bounded k-turn ends in the return lane), wide-section turn. Full-stack:
+  start -> ramp -> bridge -> helix -> tunnel -> narrow -> gravel -> bank ->
+  potholes -> wide (real gap found, decoys ignored, turned in) all pass.
 
 ### Not verified yet (needs the Jetson)
-- `colcon build` and a real launch. Nav2 parameter names target Jazzy; check
-  the logs for unknown/invalid parameters on first launch.
+- Real hardware launch (the stack is built and run in Docker, not on the Orin).
 - ZED topic names (`/zed/zed_node/...`) and frames (`zed_camera_link`).
 - Sensor sign conventions: scan orientation, IMU pitch sign (REP-103: nose
   down is positive pitch; the code converts to `nose_up`).
@@ -302,8 +365,12 @@ AprilTag `tag36h11`, IDs 0-11 mapped to zones in `tuning.yaml`
   ZED resolution if the controller misses 20 Hz.
 
 ### Known limits
-- **Turning radius.** The helix lane allows 0.87-1.57 m. At 1.52 m there is no
-  margin. Fix the servo power first (see `steering_diagnosis.txt`).
+- **Turning radius is the bottleneck** (simulation confirms it). At 1.52 m:
+  the helix has under 3 cm of rail margin and grazes it on some runs; the
+  bucket field passes only intermittently; the gap beside the V decoy needs
+  reversing points. Fix the servo power first (`steering_diagnosis.txt`),
+  then re-run `docker/run_sim.sh r12 true_min_turn_radius:=1.2` and remove the
+  ramp/tunnel `lateral_offset`s.
 - **Helix and bank are open-loop on yaw.** The camera-based rail/drop-off
   edge detector (`edge_source`) is designed but not implemented; on tilted
   ground the lidar can't see the 6" rails.

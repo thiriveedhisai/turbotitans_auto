@@ -13,6 +13,7 @@ bt_navigator:
     default_server_timeout: 20
     wait_for_service_timeout: 1000
     navigators: ["navigate_to_pose"]
+    error_code_names: ["compute_path_error_code", "follow_path_error_code"]
     navigate_to_pose:
       plugin: "nav2_bt_navigator::NavigateToPoseNavigator"
 
@@ -187,7 +188,7 @@ local_costmap:
           obstacle_min_range: 0.0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        inflation_radius: 0.35
+        inflation_radius: 0.50                  # >= circumscribed radius (0.49 m)
         cost_scaling_factor: 4.0
       always_send_full_costmap: true
 
@@ -222,7 +223,7 @@ global_costmap:
           obstacle_min_range: 0.0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        inflation_radius: 0.35
+        inflation_radius: 0.50                  # >= circumscribed radius (0.49 m)
         cost_scaling_factor: 4.0
       always_send_full_costmap: true
 

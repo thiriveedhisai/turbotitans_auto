@@ -30,7 +30,9 @@ class BehaviorExecutor(TTNode):
         self.yaw_offset, self.flip = self.scan_args()
         self.cfg = Config(self.steering_model(), {g: self.group(g) for g in GAIN_GROUPS},
                           half_width=float(self.param('vehicle.width', 0.20)) / 2.0,
-                          sweep_margin=float(self.param('sweep_margin', 0.15)))
+                          sweep_margin=float(self.param('sweep_margin', 0.15)),
+                          front_overhang=float(self.param('vehicle.lidar_to_front', 0.20)),
+                          rear_overhang=float(self.param('vehicle.lidar_to_rear', 0.30)))
         st = self.group('stuck')
         self.stuck = StuckMonitor(float(st.get('min_speed', 0.05)), float(st.get('time_s', 1.5)),
                                   float(st.get('backoff_distance', 0.3)), int(st.get('max_retries', 3)))
@@ -69,7 +71,8 @@ class BehaviorExecutor(TTNode):
         except (ValueError, KeyError) as exc:
             self.get_logger().error(f'bad /behavior/cmd {msg.data!r}: {exc}')
             return
-        if req.get('id') == self.cmd_id and self.pending is None:
+        latest = self.pending.get('id') if self.pending else self.cmd_id
+        if req.get('id') == latest:
             return
         self.pending = req
         self.get_logger().info(f'behavior <- {name} {req.get("params", {})}')
@@ -85,7 +88,7 @@ class BehaviorExecutor(TTNode):
         self.terrain = msg.data
 
     # ---------------------------------------------------------------- loop
-    def context(self, now):
+    def make_context(self, now):
         fresh = self.scan is not None and now - self.scan_time < 0.5
         return Context(t=now, odom=self.odom, scan=self.scan if fresh else None,
                        lidar_ok=self.lidar_ok and fresh, terrain=self.terrain)
@@ -118,7 +121,7 @@ class BehaviorExecutor(TTNode):
         now = self.now_s()
         dt = 0.0 if self.last_t is None else now - self.last_t
         self.last_t = now
-        ctx = self.context(now)
+        ctx = self.make_context(now)
         if self.pending is not None:
             self.activate(ctx)
         if self.behavior is None:

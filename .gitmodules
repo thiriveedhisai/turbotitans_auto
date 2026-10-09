@@ -1,0 +1,9 @@
+[submodule "src/sllidar_ros2"]
+	path = src/sllidar_ros2
+	url = https://github.com/Slamtec/sllidar_ros2.git
+[submodule "src/zed-ros2-wrapper"]
+	path = src/zed-ros2-wrapper
+	url = https://github.com/stereolabs/zed-ros2-wrapper.git
+[submodule "src/zed-ros2-examples"]
+	path = src/zed-ros2-examples
+	url = https://github.com/stereolabs/zed-ros2-examples.git

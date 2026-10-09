@@ -1,0 +1,167 @@
+# Course plan, in driving order. Plain YAML read by mission_manager.
+# Edit speeds/distances here; per-behavior gains live in tuning.yaml.
+# Turn directions follow the course drawing. Distances are approximate from the
+# drawing and should be checked on the real course.
+
+marker_skip_max: 2           # a marker up to N zones ahead jumps straight there
+marker_skip_min_time_s: 2.0
+
+zones:
+  - name: start
+    speed_cap: 1.5
+    timeout_s: 20
+    steps:
+      - behavior: wall_center
+        params: {speed: 1.5}
+        until: [terrain=ramp_up, marker=ramp_up]
+
+  # 20% straight ramp up to a 25" bridge. Lidar is gated off while tilted, so
+  # this is heading-hold on the direction lined up in the start corridor.
+  - name: ramp_up
+    speed_cap: 0.9
+    timeout_s: 12
+    steps:
+      - behavior: heading_hold
+        params: {speed: 0.9}
+        until: [terrain!=ramp_up]
+        after_distance: 0.5
+
+  - name: bridge
+    speed_cap: 0.5
+    timeout_s: 10
+    steps:
+      - behavior: heading_hold
+        params: {speed: 0.5}
+        until: [terrain=ramp_down]
+
+  # 270 deg left helix, ~4 ft centreline radius, 11% down, ~6" rails (90% sure).
+  # Lane allows 0.87-1.57 m path radius for a 0.20 m wide truck.
+  - name: helix
+    speed_cap: 0.5
+    timeout_s: 30
+    steps:
+      - behavior: arc_turn
+        params: {direction: left, turn_deg: 270, radius: 1.30, speed: 0.5, allow_kturn: false}
+        until: [done]
+
+  # 5 ft tunnel under the bridge, then the 32" x 10 ft corridor.
+  - name: tunnel
+    speed_cap: 1.0
+    timeout_s: 15
+    steps:
+      - behavior: wall_center
+        params: {speed: 1.0}
+        until: [distance>=4.3, marker=narrow]
+
+  # 20" straight, then a 28" wide right curve (~6 ft radius) into the gravel lane.
+  - name: narrow
+    speed_cap: 0.6
+    timeout_s: 25
+    steps:
+      - behavior: wall_center
+        params: {speed: 0.6}
+        until: [yaw>=75, marker=gravel, terrain=rough]
+        after_distance: 2.0
+
+  # 2" ramp, 4x8 ft pea gravel, 2" ramp down, flat. Straight and steady.
+  - name: gravel
+    speed_cap: 0.8
+    timeout_s: 15
+    steps:
+      - behavior: heading_hold
+        params: {speed: 0.8, center_gain: 0.8, center_max_width: 1.5}
+        until: [distance>=4.0, marker=bank_approach]
+
+  - name: bank_approach
+    speed_cap: 1.0
+    timeout_s: 15
+    steps:
+      - behavior: wall_center
+        params: {speed: 1.0}
+        until: [walls_lost>=1.2, terrain=bank]
+        after_distance: 1.0
+
+  # 8.5 deg banked plane: 180 deg right around the divider end.
+  - name: bank_uturn
+    speed_cap: 0.6
+    timeout_s: 30
+    allow_marker_skip: false
+    steps:
+      - behavior: arc_turn
+        params: {direction: right, turn_deg: 180, radius: 1.30, speed: 0.6, allow_kturn: true}
+        until: [done]
+
+  - name: pothole
+    speed_cap: 0.7
+    timeout_s: 20
+    steps:
+      # 96" flat lane to the potholes.
+      - behavior: wall_center
+        params: {speed: 0.7}
+        until: [terrain=rough, distance>=2.6]
+        after_distance: 1.0
+      # 1.5" ramp, holes/bumps, 1.5" ramp down: hold straight.
+      - behavior: heading_hold
+        params: {speed: 0.6, center_gain: 0.8, center_max_width: 1.5}
+        until: [distance>=3.6, marker=wide]
+
+  # 11x26 ft area with decoy bales. Turn left (south), then search the LEFT
+  # wall for the bucket-zone entrance. Decoy notches fail the depth test.
+  - name: wide
+    speed_cap: 0.9
+    timeout_s: 60
+    steps:
+      - behavior: arc_turn
+        params: {direction: left, turn_deg: 90, radius: 1.6, speed: 0.6, allow_kturn: true}
+        until: [done]
+      # Search goal stays clear of the south wall and the V decoy; VERIFY on course.
+      - nav2: {goal: gap, side: left, inside: 0.8, min_ahead: 0.3,
+               search: {forward: 4.5, left: 0.5}}
+        fallback:
+          behavior: wall_center
+          params: {speed: 0.5, follow: left, wall_target: 0.8}
+        until: [done]
+        timeout_s: 45
+
+  # 2-9 buckets; exit is a 36" opening on the far side, lower right.
+  - name: buckets
+    speed_cap: 0.7
+    timeout_s: 60
+    steps:
+      - nav2: {goal: relative, forward: 3.2, left: -0.8}
+        fallback:
+          behavior: gap_follow
+          params: {speed: 0.5, goal_heading_deg: -15, distance: 3.5}
+        until: [done, marker=hoops]
+
+  # Two hoops 96" apart in a 72" lane, a right U-turn with a third hoop, then
+  # the lane to the car wash.
+  - name: hoops
+    speed_cap: 0.8
+    timeout_s: 90
+    steps:
+      - gate: {approach: 1.0, beyond: 0.6, search_forward: 1.5, commit_speed: 0.5}
+      - gate: {approach: 1.0, beyond: 0.6, search_forward: 1.5, commit_speed: 0.5}
+      - behavior: arc_turn
+        params: {direction: right, turn_deg: 90, radius: 1.6, speed: 0.6, allow_kturn: true}
+      - gate: {approach: 1.0, beyond: 0.6, search_forward: 1.5, commit_speed: 0.5}
+      - behavior: arc_turn
+        params: {direction: right, turn_deg: 90, radius: 1.6, speed: 0.6, allow_kturn: true}
+
+  # Ribbons fool both sensors: ignore the front cone, hold heading, go fast.
+  # Ends on distance only, so the finish marker can't stop us short of the line.
+  - name: car_wash
+    speed_cap: 1.8
+    timeout_s: 15
+    steps:
+      - behavior: heading_hold
+        params: {speed: 1.8, center_gain: 0.5, center_max_width: 1.6, ignore_front_deg: 60,
+                 distance: 5.0}
+        until: [done]
+
+  - name: finish
+    speed_cap: 0.0
+    allow_marker_skip: false
+    steps:
+      - behavior: stop
+        until: [time>=0.3]

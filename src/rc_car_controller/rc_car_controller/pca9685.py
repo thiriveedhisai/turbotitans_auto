@@ -6,7 +6,6 @@ PCA9685 output-enable (OE) pin is handled separately by the ROS node via GPIO,
 not by this class.
 """
 
-import math
 import time
 
 try:
@@ -48,6 +47,7 @@ class PCA9685:
         self._address = address
         self._osc_clock = osc_clock
         self._freq_hz = 50.0
+        self._tick_us = 1_000_000.0 / (self._freq_hz * _MAX_TICKS)
         self._bus = SMBus(bus_num)
         self.reset()
 
@@ -69,9 +69,10 @@ class PCA9685:
     def set_pwm_freq(self, freq_hz):
         """Set the PWM output frequency (Hz) for all channels."""
         self._freq_hz = float(freq_hz)
-        prescale_val = self._osc_clock / (_MAX_TICKS * self._freq_hz)
-        prescale = int(math.floor(prescale_val - 0.5 + 1.0))  # round
+        prescale = int(round(self._osc_clock / (_MAX_TICKS * self._freq_hz))) - 1
         prescale = max(3, min(255, prescale))
+        # Pulse math uses the period actually produced, not the requested one.
+        self._tick_us = (prescale + 1) * 1_000_000.0 / self._osc_clock
 
         old_mode = self._bus.read_byte_data(self._address, _MODE1)
         sleep_mode = (old_mode & ~_RESTART) | _SLEEP
@@ -84,8 +85,7 @@ class PCA9685:
 
     def set_pulse_us(self, channel, pulse_us):
         """Drive ``channel`` with a pulse width of ``pulse_us`` microseconds."""
-        period_us = 1_000_000.0 / self._freq_hz
-        ticks = int(round(pulse_us / period_us * _MAX_TICKS))
+        ticks = int(round(pulse_us / self._tick_us))
         ticks = max(0, min(_MAX_TICKS - 1, ticks))
         self._set_pwm(channel, 0, ticks)
 

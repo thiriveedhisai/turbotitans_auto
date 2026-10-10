@@ -32,7 +32,8 @@ class BehaviorExecutor(TTNode):
                           half_width=float(self.param('vehicle.width', 0.20)) / 2.0,
                           sweep_margin=float(self.param('sweep_margin', 0.15)),
                           front_overhang=float(self.param('vehicle.lidar_to_front', 0.20)),
-                          rear_overhang=float(self.param('vehicle.lidar_to_rear', 0.30)))
+                          rear_overhang=float(self.param('vehicle.lidar_to_rear', 0.30)),
+                          axle_back=float(self.param('vehicle.lidar_ahead_of_axle', 0.23)))
         st = self.group('stuck')
         self.stuck = StuckMonitor(float(st.get('min_speed', 0.05)), float(st.get('time_s', 1.5)),
                                   float(st.get('backoff_distance', 0.3)), int(st.get('max_retries', 3)))
@@ -133,7 +134,8 @@ class BehaviorExecutor(TTNode):
             cmd = self.stuck.step(ctx, dt)
         else:
             cmd = self.behavior.step(ctx, dt)
-            if cmd.status == RUNNING and self.stuck.check(ctx, cmd, self.cfg):
+            if (cmd.status == RUNNING and not getattr(self.behavior, 'self_recovers', False)
+                    and self.stuck.check(ctx, cmd, self.cfg)):
                 self.get_logger().warn(f'stuck in {self.name}, backing off '
                                        f'(retry {self.stuck.retries})')
                 cmd = self.stuck.step(ctx, dt)

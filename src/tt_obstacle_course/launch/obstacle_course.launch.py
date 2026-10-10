@@ -40,6 +40,7 @@ def generate_launch_description():
         DeclareLaunchArgument('turn_radius', default_value='',
                               description='Override the minimum turning radius (m) everywhere; '
                                           'empty = use tuning.yaml / nav2_params.yaml'),
+        DeclareLaunchArgument('use_sim_time', default_value='false'),
         # Lidar pose relative to the ZED camera link; keep laser_offset_* in tuning.yaml equal.
         DeclareLaunchArgument('laser_x', default_value='-0.15'),
         DeclareLaunchArgument('laser_y', default_value='0.0'),
@@ -58,20 +59,13 @@ def generate_launch_description():
             launch_arguments={'frame_id': 'laser'}.items()),
     ])
 
-    laser_tf = Node(
-        package='tf2_ros', executable='static_transform_publisher', name='laser_tf',
-        arguments=['--x', LaunchConfiguration('laser_x'), '--y', LaunchConfiguration('laser_y'),
-                   '--z', LaunchConfiguration('laser_z'), '--yaw', LaunchConfiguration('laser_yaw'),
-                   '--frame-id', 'zed_camera_link', '--child-frame-id', 'laser'])
-
     motor = Node(
         package='rc_car_controller', executable='rc_car_controller_node', name='rc_car_controller',
         output='screen', condition=IfCondition(LaunchConfiguration('motor')),
         parameters=[PathJoinSubstitution([FindPackageShare('rc_car_controller'), 'config', 'params.yaml']),
                     tuning])
 
-    return LaunchDescription(args + [drivers, laser_tf, motor,
-                                     OpaqueFunction(function=_stack_and_nav2)])
+    return LaunchDescription(args + [drivers, motor, OpaqueFunction(function=_stack_and_nav2)])
 
 
 def _stack_and_nav2(context):
@@ -80,12 +74,13 @@ def _stack_and_nav2(context):
     nav2_params = LaunchConfiguration('nav2_params')
     use_nav2 = LaunchConfiguration('use_nav2')
     radius = LaunchConfiguration('turn_radius').perform(context).strip()
-    ours, planner, controller = [], [], []
+    sim_time = [{'use_sim_time': LaunchConfiguration('use_sim_time').perform(context) == 'true'}]
+    ours, planner, controller = [*sim_time], [*sim_time], [*sim_time]
     if radius:
         r = float(radius)
-        ours = [{'vehicle.planning_min_turn_radius': r}]
-        planner = [{'GridBased.minimum_turning_radius': r}]
-        controller = [{'FollowPath.AckermannConstraints.min_turning_r': r}]
+        ours.append({'vehicle.planning_min_turn_radius': r})
+        planner.append({'GridBased.minimum_turning_radius': r})
+        controller.append({'FollowPath.AckermannConstraints.min_turning_r': r})
 
     def tt(exe, extra=(), condition=None):
         return Node(package='tt_obstacle_course', executable=exe, name=exe, output='screen',
@@ -111,10 +106,18 @@ def _stack_and_nav2(context):
         Node(package='nav2_planner', executable='planner_server', name='planner_server',
              output='screen', parameters=[nav2_params, *planner]),
         Node(package='nav2_behaviors', executable='behavior_server', name='behavior_server',
-             output='screen', parameters=[nav2_params]),
+             output='screen', parameters=[nav2_params, *sim_time]),
         Node(package='nav2_bt_navigator', executable='bt_navigator', name='bt_navigator',
-             output='screen', parameters=[nav2_params, {'default_nav_to_pose_bt_xml': bt_xml}]),
+             output='screen', parameters=[nav2_params, {'default_nav_to_pose_bt_xml': bt_xml},
+                                          *sim_time]),
         Node(package='nav2_lifecycle_manager', executable='lifecycle_manager',
-             name='lifecycle_manager_navigation', output='screen', parameters=[nav2_params]),
+             name='lifecycle_manager_navigation', output='screen',
+             parameters=[nav2_params, *sim_time]),
     ])
-    return [*stack, nav2]
+    laser_tf = Node(
+        package='tf2_ros', executable='static_transform_publisher', name='laser_tf',
+        parameters=sim_time,
+        arguments=['--x', LaunchConfiguration('laser_x'), '--y', LaunchConfiguration('laser_y'),
+                   '--z', LaunchConfiguration('laser_z'), '--yaw', LaunchConfiguration('laser_yaw'),
+                   '--frame-id', 'zed_camera_link', '--child-frame-id', 'laser'])
+    return [laser_tf, *stack, nav2]

@@ -56,16 +56,33 @@ class ScanView:
         r = self.ranges[m]
         return float(r.min()) if r.size else math.inf
 
-    def corridor_clearance(self, half_width, forward=True, ignore_half_angle=0.0, min_x=0.0):
+    def corridor_clearance(self, half_width, forward=True, ignore_half_angle=0.0, min_x=0.0,
+                           curvature=0.0, axle_back=0.0):
         """Distance to the nearest point inside the straight strip the vehicle
         would sweep (|y| <= half_width), ahead or behind. Side walls outside
         the strip are ignored, unlike an angular cone. Points closer than min_x
-        (alongside the body, behind the bumper) are ignored: stopping can't help."""
+        (alongside the body, behind the bumper) are ignored: stopping can't help.
+
+        curvature != 0: check the arc band swept at that curvature instead
+        (rotation centre on the rear-axle line, axle_back metres behind the
+        lidar) and return the arc length to the nearest point in it. A wall
+        alongside the truck while it steers away no longer reads as blocking."""
         m = np.isfinite(self.ranges)
         if ignore_half_angle > 0.0:
             m &= np.abs(self.angles) > ignore_half_angle
         a, r = self.angles[m], self.ranges[m]
         x, y = r * np.cos(a), r * np.sin(a)
+        if abs(curvature) > 1e-3:
+            side = 1.0 if curvature > 0 else -1.0
+            cx, cy = -axle_back, side / abs(curvature)
+            r_l = math.hypot(cx, cy)
+            phi0 = math.atan2(-cy, -cx)
+            dphi = side * _wrap(np.arctan2(y - cy, x - cx) - phi0)
+            if not forward:
+                dphi = -dphi
+            arc = r_l * dphi
+            sel = (np.abs(np.hypot(x - cx, y - cy) - r_l) <= half_width) & (arc > min_x) & (dphi < math.pi / 2)
+            return float(arc[sel].min()) if sel.any() else math.inf
         ahead = (x > min_x) if forward else (x < -min_x)
         sel = (np.abs(y) <= half_width) & ahead
         return float(np.abs(x[sel]).min()) if sel.any() else math.inf
@@ -98,20 +115,69 @@ class ScanView:
         d = np.sort(r[ok] * np.abs(np.sin(a[ok])))
         return float(d[int(0.8 * (d.size - 1))]) if d.size >= 5 else None
 
-    def wall_estimate(self, side, theta=45 * DEG, lookahead=0.0, max_range=3.0):
-        """Two-beam wall fit. Returns (projected_distance, alpha) or None.
-
-        alpha > 0 means the vehicle is heading away from that wall.
-        """
-        b = self.range_at(side * 90 * DEG)
-        a = self.range_at(side * (90 * DEG - theta))
-        if not (b < max_range and a < max_range / math.cos(theta)):
-            return None
-        alpha = math.atan2(a * math.cos(theta) - b, a * math.sin(theta))
-        dist = b * math.cos(alpha)
-        return dist + lookahead * math.sin(alpha), alpha
-
     # --------------------------------------------------------------- openings
+    def walls_end(self, max_lat=1.5, min_lat=0.15, max_gap=0.35):
+        """Distance ahead where the nearer of the two side walls stops (None if a
+        side has no wall alongside). Each wall is followed forward from abeam
+        while consecutive returns are < max_gap apart."""
+        xs, ys = self.points()
+        ends = []
+        for side in (1, -1):
+            m = (side * ys >= min_lat) & (side * ys <= max_lat) & (xs > -0.3)
+            x = np.sort(xs[m])
+            if x.size < 3 or x[0] > 0.3:
+                return None
+            jumps = np.nonzero(np.diff(x) > max_gap)[0]
+            ends.append(float(x[jumps[0]] if jumps.size else x[-1]))
+        return min(ends)
+
+    def lane_walls(self, max_half_width=1.0, x_min=-0.25, x_max=1.6, bin_m=0.1, min_bins=4):
+        """Fit each lidar wall: {+1: (y0, slope, n, curv) | None, -1: ...}, with
+        y = y0 + slope * x + curv * x^2 in the robot frame (curv only when enough wall
+        is seen to tell a bend from noise, else 0).
+
+        Per x-bin only the point nearest the robot counts, so things behind the wall
+        (or a bale's far face) are ignored; x_max should stop short of a wall ahead."""
+        xs, ys = self.points()
+        out = {}
+        for side in (1, -1):
+            m = (xs >= x_min) & (xs <= x_max) & (side * ys > 0.05) & (side * ys < max_half_width)
+            if m.sum() < min_bins:
+                out[side] = None
+                continue
+            bx, by = xs[m], side * ys[m]
+            idx = np.floor((bx - x_min) / bin_m).astype(int)
+            near = {}
+            for i, x, y in zip(idx, bx, by):
+                if i not in near or y < near[i][1]:
+                    near[i] = (x, y)
+            if len(near) < min_bins:
+                out[side] = None
+                continue
+            px = np.array([p[0] for p in near.values()])
+            py = np.array([p[1] for p in near.values()])
+            fit = None
+            for _ in range(2):
+                if px.size < min_bins:
+                    break
+                slope, y0 = np.polyfit(px, py, 1)
+                res = np.abs(py - (y0 + slope * px))
+                fit = (y0, slope)
+                keep = res < max(0.06, 2.5 * float(np.median(res)))
+                if keep.all():
+                    break
+                px, py = px[keep], py[keep]
+            if fit is None:
+                out[side] = None
+                continue
+            curv = 0.0
+            if px.size >= 8 and np.ptp(px) >= 0.8:
+                c2, c1, c0 = np.polyfit(px, py, 2)
+                if abs(c2) <= 0.8:
+                    fit, curv = (c0, c1), c2
+            out[side] = (side * fit[0], side * fit[1], int(px.size), side * curv)
+        return out
+
     def find_side_openings(self, side, min_width, depth_beyond,
                            a_from=15 * DEG, a_to=165 * DEG):
         """Openings in the wall on ``side`` that lead somewhere.
@@ -128,10 +194,17 @@ class ScanView:
             a, r = a[::-1], r[::-1]
         return _openings(a, r, r * np.abs(np.sin(a)), min_width, depth_beyond)
 
+    def find_front_openings(self, min_width, depth_beyond, half_angle=60 * DEG):
+        """Openings in the wall ahead (roughly square to the heading) that lead somewhere."""
+        a, r = self.sector(-half_angle, half_angle)
+        return _openings(a, r, r * np.abs(np.cos(a)), min_width, depth_beyond)
+
     # ------------------------------------------------------------------ gates
     def find_gates(self, gate_width, tol, post_max_extent=0.15,
-                   cluster_gap=0.10, max_range=3.5, half_fov=70 * DEG, isolation=0.25):
-        """Pairs of thin, free-standing posts ``gate_width`` apart in front (hoop legs).
+                   cluster_gap=0.10, max_range=3.5, half_fov=70 * DEG, isolation=0.25,
+                   max_yaw=60 * DEG):
+        """Pairs of thin, free-standing posts ``gate_width`` apart in front (hoop legs),
+        open between them and passable roughly forward (|yaw| <= max_yaw).
 
         A post must have no other returns within ``isolation`` m (apart from its
         partner), which rejects wall corners and bale ends.
@@ -152,6 +225,11 @@ class ScanView:
                 if extent <= post_max_extent:
                     clusters.append((float(cx.mean()), float(cy.mean())))
                 start = k
+        # Sparse returns from a wall seen at a grazing angle look like posts: drop
+        # anything lying on a fitted side wall.
+        walls = [w for w in self.lane_walls(max_half_width=1.2, x_max=max_range).values() if w]
+        clusters = [(px, py) for px, py in clusters
+                    if all(abs(py - (w[0] + w[1] * px + w[3] * px * px)) > 0.1 for w in walls)]
 
         def isolated(p, partner):
             d_p = np.hypot(allx - p[0], ally - p[1])
@@ -169,10 +247,16 @@ class ScanView:
                 if not (isolated(clusters[i], clusters[j]) and isolated(clusters[j], clusters[i])):
                     continue
                 cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+                # A hoop is open between its legs; two returns on a wall are not.
+                if (np.hypot(allx - cx, ally - cy) < min(0.2, d / 3)).any():
+                    continue
                 nx, ny = -(y2 - y1), x2 - x1
                 if nx * cx + ny * cy < 0:
                     nx, ny = -nx, -ny
-                gates.append({'x': cx, 'y': cy, 'yaw': math.atan2(ny, nx), 'width': d})
+                yaw = math.atan2(ny, nx)
+                if abs(yaw) > max_yaw:
+                    continue
+                gates.append({'x': cx, 'y': cy, 'yaw': yaw, 'width': d})
         gates.sort(key=lambda g: math.hypot(g['x'], g['y']))
         return gates
 

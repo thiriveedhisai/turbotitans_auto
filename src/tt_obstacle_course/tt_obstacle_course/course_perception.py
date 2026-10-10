@@ -3,6 +3,7 @@
 Publishes (odom frame, only after a detection persists for N scans):
   /perception/left_gap    PoseStamped  opening in the left wall, yaw = through it
   /perception/right_gap   PoseStamped
+  /perception/front_gap   PoseStamped  opening in the wall ahead (bucket-field exit)
   /perception/gate        PoseStamped  nearest hoop gate, yaw = passing direction
 """
 
@@ -55,8 +56,12 @@ class CoursePerception(TTNode):
         # Openings further back than this (e.g. the corridor just left) are ignored.
         self.gap_max_angle = math.radians(float(self.param('gap_max_angle_deg', 110.0)))
         self.gate_width = float(self.param('gate_width', 0.60))
+        self.front_gap = (float(self.param('front_gap_min_width', 0.6)),
+                          float(self.param('front_gap_max_width', 1.4)),
+                          float(self.param('front_gap_depth_beyond', 1.0)))
         self.gate_tol = float(self.param('hoop_post_spacing_tol', 0.10))
         self.post_extent = float(self.param('post_max_extent', 0.15))
+        self.post_isolation = float(self.param('post_isolation', 0.12))
         self.frame = self.param('odom_frame', 'odom')
         persist = int(self.param('persist_scans', 3))
         match = float(self.param('match_distance', 0.3))
@@ -64,7 +69,7 @@ class CoursePerception(TTNode):
         self.odom = OdomTracker()
         self.lidar_ok = True
         self.tracks = {'left_gap': Track(persist, match), 'right_gap': Track(persist, match),
-                       'gate': Track(persist, match)}
+                       'front_gap': Track(persist, match), 'gate': Track(persist, match)}
         self.pubs = {k: self.create_publisher(PoseStamped, f'/perception/{k}', 10) for k in self.tracks}
 
         self.create_subscription(Odometry, self.param('odom_topic', '/zed/zed_node/odom'),
@@ -84,12 +89,15 @@ class CoursePerception(TTNode):
         if not self.odom.valid or not self.lidar_ok:
             return
         scan = ScanView.from_msg(msg, self.yaw_offset, self.flip)
+        lo, hi, depth = self.front_gap
         found = {
             'left_gap': scan.find_side_openings(+1, self.min_gap, self.gap_depth,
                                                 a_to=self.gap_max_angle),
             'right_gap': scan.find_side_openings(-1, self.min_gap, self.gap_depth,
                                                  a_to=self.gap_max_angle),
-            'gate': scan.find_gates(self.gate_width, self.gate_tol, self.post_extent),
+            'front_gap': [g for g in scan.find_front_openings(lo, depth) if g['width'] <= hi],
+            'gate': scan.find_gates(self.gate_width, self.gate_tol, self.post_extent,
+                                    isolation=self.post_isolation),
         }
         for key, dets in found.items():
             pose = self.tracks[key].update(self.to_odom(dets[0]) if dets else None)

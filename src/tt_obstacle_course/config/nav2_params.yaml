@@ -24,7 +24,7 @@ planner_server:
     GridBased:
       plugin: "nav2_smac_planner::SmacPlannerHybrid"
       motion_model_for_search: "REEDS_SHEPP"     # plans reverse segments
-      minimum_turning_radius: 1.52               # TUNE
+      minimum_turning_radius: 1.07               # TUNE
       reverse_penalty: 1.3
       change_penalty: 0.2                        # per forward/reverse switch
       non_straight_penalty: 1.2
@@ -67,7 +67,7 @@ controller_server:
       plugin: "nav2_mppi_controller::MPPIController"
       motion_model: "Ackermann"
       AckermannConstraints:
-        min_turning_r: 1.52                      # TUNE
+        min_turning_r: 1.07                      # TUNE
       time_steps: 56
       model_dt: 0.05
       batch_size: 1000                           # lower if the Orin Nano can't hold 20 Hz

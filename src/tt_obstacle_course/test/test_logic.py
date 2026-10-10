@@ -18,7 +18,7 @@ R_MIN = 1.52
 STEER = SteeringModel(R_MIN, 0.5)
 GAINS = {
     'heading_hold': {'kp': 2.0, 'kd': 0.1},
-    'wall_center': {'kp': 1.2, 'kd': 0.15, 'lookahead': 0.8},
+    'wall_center': {'lookahead': 0.0},
     'arc_turn': {'yaw_rate_kp': 0.8, 'tolerance_deg': 5.0},
     'k_turn': {'front_clearance': 0.45, 'rear_clearance': 0.40, 'leg_max_distance': 0.6,
                'leg_speed': 0.4, 'heading_tolerance_deg': 10.0, 'max_legs': 30},
@@ -89,7 +89,14 @@ class Sim:
 
 
 def cfg():
-    return Config(STEER, GAINS)
+    # Sim rotates about the sensor point, so no rear-axle offset.
+    return Config(STEER, GAINS, axle_back=0.0)
+
+
+def arc_walls(cx, cy, r, a0, a1, n=40):
+    pts = [(cx + r * math.cos(a0 + (a1 - a0) * k / n), cy + r * math.sin(a0 + (a1 - a0) * k / n))
+           for k in range(n + 1)]
+    return list(zip(pts[:-1], pts[1:]))
 
 
 def test_steering_model_round_trip():
@@ -106,6 +113,54 @@ def test_wall_center_converges_in_corridor():
     assert sim.run(beh) == DONE
     assert abs(sim.y) < 0.08
     assert sim.min_wall_distance() > 0.12
+
+
+def test_wall_center_narrow_lane_fast_offset_start():
+    # 20 in lane, 0.1 m off centre and 10 deg off axis at 1.0 m/s: must settle, not weave.
+    walls = [((-1, 0.254), (30, 0.254)), ((-1, -0.254), (30, -0.254))]
+    sim = Sim(y=0.1, yaw=math.radians(-10), segments=walls)
+    beh = make_behavior('wall_center', {'speed': 1.0, 'distance': 6.0}, cfg())
+    worst = math.inf
+    beh.start(sim.ctx())
+    while sim.t < 20:
+        cmd = beh.step(sim.ctx(), 0.05)
+        if cmd.status != RUNNING:
+            break
+        sim.step(cmd)
+        worst = min(worst, sim.min_wall_distance())
+    assert cmd.status == DONE
+    assert abs(sim.y) < 0.03
+    assert worst > 0.12          # half the truck width + margin
+
+
+def test_wall_center_keeps_lane_width_when_a_wall_ends():
+    # Left wall stops at x=2 (opening): keep centred using the remembered width.
+    walls = [((-1, 0.405), (2, 0.405)), ((-1, -0.405), (30, -0.405))]
+    sim = Sim(y=0.0, segments=walls)
+    beh = make_behavior('wall_center', {'speed': 0.8, 'distance': 6.0}, cfg())
+    assert sim.run(beh) == DONE
+    assert abs(sim.y) < 0.06
+
+
+def test_wall_center_follows_a_curved_lane():
+    # 28 in lane bending 90 deg right on a 6 ft centreline radius (the narrow curve).
+    r, w = 1.83, 0.71
+    walls = ([((-1, w / 2), (0, w / 2)), ((-1, -w / 2), (0, -w / 2))]
+             + arc_walls(0, -r, r + w / 2, math.pi / 2, 0) + arc_walls(0, -r, r - w / 2, math.pi / 2, 0)
+             + [((r + w / 2, -r), (r + w / 2, -r - 3)), ((r - w / 2, -r), (r - w / 2, -r - 3))])
+    sim = Sim(x=-0.8, segments=walls)
+    beh = make_behavior('wall_center', {'speed': 0.6, 'distance': 5.5}, cfg())
+    worst = math.inf
+    beh.start(sim.ctx())
+    while sim.t < 20:
+        cmd = beh.step(sim.ctx(), 0.05)
+        if cmd.status != RUNNING:
+            break
+        sim.step(cmd)
+        worst = min(worst, sim.min_wall_distance())
+    assert cmd.status == DONE
+    assert sim.y < -r - 0.3 and abs(sim.x - r) < 0.12
+    assert worst > 0.12
 
 
 def test_arc_turn_helix_270_left():
@@ -153,6 +208,26 @@ def test_corridor_clearance_ignores_side_walls():
     blocked = raycast(lane + [((1.0, -0.1), (1.0, 0.1))], 0.0, 0.0, 0.0)
     assert blocked.corridor_clearance(0.18) == pytest.approx(1.0, abs=0.03)
     assert blocked.corridor_clearance(0.18, forward=False) == math.inf
+
+
+def test_corridor_clearance_arc_follows_steering():
+    # Wall 0.16 m to the left, parallel (3-D sim tunnel stop): a straight strip
+    # says blocked; steering right away from it is clear, steering left into it is not.
+    wall = [((-2, 0.16), (10, 0.16))]
+    scan = raycast(wall, 0.0, 0.0, 0.0)
+    assert scan.corridor_clearance(0.18, min_x=0.2) < 0.5
+    k = 1 / 1.2
+    assert scan.corridor_clearance(0.18, min_x=0.2, curvature=-k, axle_back=0.23) == math.inf
+    assert scan.corridor_clearance(0.18, min_x=0.2, curvature=k, axle_back=0.23) < 0.8
+    # Box straight ahead at 1 m is still seen at gentle curvature, at ~ arc length 1 m.
+    box = raycast([((1.0, -0.15), (1.0, 0.15))], 0.0, 0.0, 0.0)
+    assert box.corridor_clearance(0.18, curvature=0.2, axle_back=0.23) == pytest.approx(1.0, abs=0.1)
+    # Reverse with left lock: the rear axle runs back along the same circle, curving
+    # left. A box behind-left, outside the straight strip, is in the way.
+    rear = raycast([((-0.9, 0.25), (-0.5, 0.25))], 0.0, 0.0, 0.0)
+    assert rear.corridor_clearance(0.18, forward=False, min_x=0.3) == math.inf
+    assert rear.corridor_clearance(0.18, forward=False, min_x=0.3, curvature=k,
+                                   axle_back=0.23) < 1.0
 
 
 def test_stuck_monitor_backs_off_then_fails():
@@ -214,3 +289,42 @@ def test_gate_detection_from_two_posts():
     assert gates[0]['x'] == pytest.approx(1.5, abs=0.05)
     assert gates[0]['y'] == pytest.approx(0.0, abs=0.05)
     assert gates[0]['yaw'] == pytest.approx(0.0, abs=0.1)
+
+
+def _box_map(segments):
+    from tt_obstacle_course.planner import ObstacleMap
+    m = ObstacleMap()
+    for (x1, y1), (x2, y2) in segments:
+        n = max(2, int(math.hypot(x2 - x1, y2 - y1) / 0.03))
+        for t in np.linspace(0, 1, n):
+            m.cells.add((int(math.floor((x1 + t * (x2 - x1)) / m.res)),
+                         int(math.floor((y1 + t * (y2 - y1)) / m.res))))
+    return m
+
+
+def test_planner_threads_a_narrow_exit_and_respects_turning_radius():
+    from tt_obstacle_course.planner import Footprint, path_blocked, plan
+    # 3.6 x 4 m field, 36" exit in the east wall off the start axis, a bucket in the way.
+    walls = [((0, 0), (3.6, 0)), ((0, 4), (3.6, 4)), ((0, 0), (0, 4)),
+             ((3.6, 0), (3.6, 1.0)), ((3.6, 1.91), (3.6, 4))]
+    bucket = [((1.8 + 0.15 * math.cos(a), 2.0 + 0.15 * math.sin(a)),
+               (1.8 + 0.15 * math.cos(a + 0.5), 2.0 + 0.15 * math.sin(a + 0.5)))
+              for a in np.arange(0, 2 * math.pi, 0.5)]
+    m = _box_map(walls + bucket)
+    fp = Footprint()
+    grid = m.inflated(-0.5, -0.5, 5.0, 4.5, fp.radius)
+    path = plan((0.4, 3.0, 0.0), (3.9, 1.455, 0.0), grid, fp, 1.07)
+    assert path is not None
+    assert not path_blocked(path, grid, fp)
+    # Every step is a straight or a full-lock arc: |dyaw| <= arc length / R (arc >= chord).
+    for (x0, y0, a0, _), (x1, y1, a1, _) in zip(path, path[1:]):
+        ds = math.hypot(x1 - x0, y1 - y0)
+        assert abs(wrap_angle(a1 - a0)) <= 1.01 * ds / 1.07 + 1e-6
+
+
+def test_planner_rejects_goal_inside_obstacle():
+    from tt_obstacle_course.planner import Footprint, plan
+    m = _box_map([((2.0, -1.0), (2.0, 1.0))])
+    fp = Footprint()
+    grid = m.inflated(-1.0, -2.0, 4.0, 2.0, fp.radius)
+    assert plan((0.0, 0.0, 0.0), (2.0, 0.0, 0.0), grid, fp, 1.07) is None

@@ -16,7 +16,7 @@ import yaml
 
 from tt_course_sim.course import FALL_DROP, Course
 from tt_obstacle_course.behaviors import RUNNING, Config, Context, StuckMonitor, make_behavior
-from tt_obstacle_course.geometry import OdomTracker, SteeringModel
+from tt_obstacle_course.geometry import OdomTracker, SteeringModel, bank_lead
 from tt_obstacle_course.scan_utils import ScanView
 
 
@@ -86,7 +86,8 @@ class Truck:
         return True
 
 
-def run(course, pose, behavior, params, max_s=40.0, radius=None, z=0.0, verbose=False, truck=None):
+def run(course, pose, behavior, params, max_s=40.0, radius=None, z=0.0, verbose=False, truck=None,
+        stop=None):
     shared, ex, gov = load_tuning()
     veh = dict(shared['vehicle'])
     if radius is None:
@@ -96,7 +97,8 @@ def run(course, pose, behavior, params, max_s=40.0, radius=None, z=0.0, verbose=
                  {k: ex[k] for k in ('heading_hold', 'wall_center', 'gap_follow', 'arc_turn',
                                      'k_turn')},
                  half_width=veh['width'] / 2, sweep_margin=ex.get('sweep_margin', 0.15),
-                 front_overhang=veh['lidar_to_front'], rear_overhang=veh['lidar_to_rear'])
+                 front_overhang=veh['lidar_to_front'], rear_overhang=veh['lidar_to_rear'],
+                 axle_back=veh['lidar_ahead_of_axle'])
     truck = truck or Truck(course, *pose, radius=radius, z=z)
     t_end = truck.t + max_s
     beh = make_behavior(behavior, params, cfg)
@@ -114,6 +116,9 @@ def run(course, pose, behavior, params, max_s=40.0, radius=None, z=0.0, verbose=
             scan, last_scan = truck.scan(), truck.t
         if int(truck.t * 100) % 5 == 0 or cmd is None:
             lidar_ok = max(abs(truck.nose_up), abs(truck.roll)) < math.radians(4)
+            if stop is not None and stop(truck, scan, lidar_ok):
+                status = 'stopped'
+                break
             ctx = Context(t=truck.t, odom=truck.odom, scan=scan, lidar_ok=lidar_ok)
             if stuck.active():
                 cmd = stuck.step(ctx, 0.05)
@@ -122,20 +127,23 @@ def run(course, pose, behavior, params, max_s=40.0, radius=None, z=0.0, verbose=
                 if cmd.status != RUNNING:
                     status = cmd.status
                     break
-                if stuck.check(ctx, cmd, cfg):
+                if not getattr(beh, 'self_recovers', False) and stuck.check(ctx, cmd, cfg):
                     cmd = stuck.step(ctx, 0.05)
                 elif stuck.exhausted():
                     status = 'failed(stuck)'
                     break
             v = cmd.speed
+            k = cfg.steering.steer_to_curvature(out_steer)
             if lidar_ok and v > 0:
-                d = scan.corridor_clearance(corridor, True, min_x=veh['lidar_to_front'])
+                d = scan.corridor_clearance(corridor, True, min_x=veh['lidar_to_front'],
+                                            curvature=k, axle_back=cfg.axle_back)
                 if d <= gov['stop_distance']:
                     v = 0.0
                 elif d < gov['slow_distance']:
                     v = min(v, max(gov['crawl_speed'], (d - gov['stop_distance']) / gov['ttc_brake_s']))
             elif lidar_ok and v < 0:
-                d = scan.corridor_clearance(corridor, False, min_x=veh['lidar_to_rear'])
+                d = scan.corridor_clearance(corridor, False, min_x=veh['lidar_to_rear'],
+                                            curvature=k, axle_back=cfg.axle_back)
                 if d <= gov['rear_stop_distance']:
                     v = 0.0
         out_steer += max(-steer_rate * 0.01, min(steer_rate * 0.01, cmd.steer - out_steer))
@@ -149,21 +157,13 @@ def run(course, pose, behavior, params, max_s=40.0, radius=None, z=0.0, verbose=
 
 
 SCENARIOS = {
-    # name: (pose function, behavior, params, success check)
-    'narrow': (lambda c: c.waypoint('narrow'), 'gap_follow',
-               {'speed': 0.5, 'max_range': 1.5, 'free_range': 0.5, 'bubble_radius': 0.2,
-                'min_width': 0.25, 'distance': 8.5}, 'done'),
+    # name: (pose function, behavior, params, success check) or a chained function
     'tunnel': (lambda c: c.waypoint('tunnel_mid'), 'wall_center', {'speed': 1.0, 'distance': 2.5},
                'done'),
-    'gravel': (lambda c: c.waypoint('gravel'), 'heading_hold',
-               {'speed': 0.8, 'center_gain': 0.8, 'center_max_width': 1.5, 'distance': 4.0},
+    'narrow': (lambda c: c.waypoint('narrow'), 'wall_center', {'speed': 0.8, 'distance': 9.2},
                'done'),
-    'bank_approach': (lambda c: c.waypoint('bank_approach'), 'wall_center',
-                      {'speed': 1.0, 'distance': 3.0}, 'done'),
-    'bank_uturn': (lambda c: c.waypoint('bank_uturn'), 'k_turn',
-                   {'direction': 'right', 'turn_deg': 180, 'leg_speed': 0.4,
-                    'leg_max_distance': 2.5, 'rev_leg_max_distance': 0.5, 'max_legs': 12,
-                    'bounds': [0.05, 1.45, -1.95, 0.8]}, 'done'),
+    'gravel': (lambda c: c.waypoint('gravel'), 'wall_center', {'speed': 0.8, 'distance': 5.5},
+               'done'),
     'wide_turn': (lambda c: c.waypoint('wide'), 'arc_turn',
                   {'direction': 'left', 'turn_deg': 90, 'radius': 1.6, 'speed': 0.6,
                    'allow_kturn': True}, 'done'),
@@ -175,12 +175,41 @@ SCENARIOS = {
 }
 
 
+def bank_chain(course, radius):
+    """mission.yaml bank_approach + bank_uturn: walls_end trigger, $bank_lead, semicircle."""
+    with open('src/tt_obstacle_course/config/mission.yaml', encoding='utf-8') as f:
+        mission = yaml.safe_load(f)
+    entry = mission.get('bank_entry', {})
+    r = radius or load_tuning()[0]['vehicle']['planning_min_turn_radius']
+    trig = float(entry.get('trigger', 1.2))
+
+    def walls_end(t, s, ok):
+        e = s.walls_end() if ok and t.odom.distance >= 0.8 else None
+        return e is not None and e <= trig
+    status, truck = run(course, course.waypoint('bank_approach'), 'wall_center', {'speed': 0.6},
+                        radius=r, stop=walls_end)
+    if status != 'stopped':
+        return 'no_trigger', truck
+    lead = bank_lead(r, mission.get('axle_to_camera', 0.38), **entry)
+    run(course, None, 'heading_hold', {'speed': 0.5, 'distance': lead}, radius=r, truck=truck)
+    xs = []
+    status, truck = run(course, None, 'arc_turn', {'direction': 'right', 'turn_deg': 180,
+                                                   'radius': r, 'speed': 0.5,
+                                                   'allow_kturn': False},
+                        radius=r, truck=truck, stop=lambda t, s, ok: xs.append(t.x) and False)
+    bx, _, _, hl, _ = course.bank_box
+    if max(xs) + 0.05 > bx + hl:
+        return 'off_plane', truck
+    return status, truck
+
+
+CHAINS = {'bank': bank_chain}
+
+
 def _in_return_lane(course, truck):
-    # Return lane centre is 1.37 m right of the entry lane, lane half-width 0.61.
-    x0, y0, yaw0 = course.waypoint('bank_uturn')
-    dx, dy = truck.x - x0, truck.y - y0
-    v = -dx * math.sin(yaw0) + dy * math.cos(yaw0)
-    return abs(v + 1.37) < 0.45 and math.cos(truck.yaw - yaw0) < -0.9
+    # Heading back west inside the 32" return lane at the pothole ramp.
+    x0, y0, _ = course.waypoint('bank_approach')
+    return abs(truck.y - (y0 - 1.495)) < 0.45 and math.cos(truck.yaw) < -0.9 and truck.x < x0 + 3.0
 
 
 def _through_narrow(course, truck):
@@ -195,7 +224,7 @@ def _through_buckets(course, truck):
     return dx * math.cos(hyaw) + dy * math.sin(hyaw) > -0.2
 
 
-ENDS = {'bank_uturn': _in_return_lane, 'narrow': _through_narrow, 'buckets': _through_buckets}
+ENDS = {'bank': _in_return_lane, 'narrow': _through_narrow, 'buckets': _through_buckets}
 
 
 def main(argv):
@@ -204,14 +233,18 @@ def main(argv):
         if a.startswith('--radius='):
             radius = float(a.split('=', 1)[1])
             argv.remove(a)
-    names = list(SCENARIOS) if not argv or argv[0] == 'all' else argv
+    names = list(SCENARIOS) + list(CHAINS) if not argv or argv[0] == 'all' else argv
     course = Course()
     ok = True
     for name in names:
-        pose_fn, beh, params, want = SCENARIOS[name]
-        pose = pose_fn(course)
-        status, truck = run(course, pose[:3], beh, params, z=pose[3] if len(pose) > 3 else 0.0,
-                            radius=radius, verbose=True)
+        if name in CHAINS:
+            status, truck = CHAINS[name](course, radius)
+            want = 'done'
+        else:
+            pose_fn, beh, params, want = SCENARIOS[name]
+            pose = pose_fn(course)
+            status, truck = run(course, pose[:3], beh, params, z=pose[3] if len(pose) > 3 else 0.0,
+                                radius=radius, verbose=True)
         good = status == want and truck.collisions == 0
         check = ENDS.get(name)
         if check:

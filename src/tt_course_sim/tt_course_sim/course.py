@@ -20,11 +20,10 @@ FALL_DROP = 0.20         # metres: a drop larger than this is a fall
 
 class Course:
 
-    def __init__(self, rails=True, seed=0, hoop_width=0.60):
+    def __init__(self, rails=True, seed=0):
         self.rng = np.random.default_rng(seed)
         self.seed = seed
         self.rails = rails
-        self.hoop_width = hoop_width
         self.x, self.y, self.yaw = 0.0, 0.0, math.pi       # start heading west
         self.zone_names = []
         self.surf = []           # rows: x, y, top, bot, gx, gy, vib, zone, layer
@@ -32,6 +31,10 @@ class Course:
         self.lines = []          # for plotting: (x1, y1, x2, y2, kind)
         self.discs = []          # (x, y, r, kind)
         self.markers = []        # (zone, x, y)
+        self.marker_yaws = []    # heading of travel when the marker is approached
+        self.segs3d = []         # (x1, y1, b1, t1, x2, y2, b2, t2, kind) wall/rail segments
+        self.slabs3d = []        # (cx, cy, cz, length, width, thick, yaw, pitch, roll, zone)
+        self.rough3d = []        # (cx, cy, yaw, length, width, z, vib)
         self.noise_boxes = []    # (cx, cy, yaw, half_len, half_wid)
         self.finish = None       # (cx, cy, yaw, half_len, half_wid)
         self.start_pose = None
@@ -55,6 +58,7 @@ class Course:
         world = [self.to_world(u, v, base) for u, v in pts]
         for (x1, y1), (x2, y2) in zip(world, world[1:]):
             self.lines.append((x1, y1, x2, y2, kind))
+            self.segs3d.append((x1, y1, bot, bot + h, x2, y2, bot, bot + h, kind))
             n = max(2, int(math.hypot(x2 - x1, y2 - y1) / 0.02))
             for t in np.linspace(0, 1, n):
                 self.obst.append((x1 + t * (x2 - x1), y1 + t * (y2 - y1), bot, bot + h))
@@ -81,8 +85,22 @@ class Course:
                 b = (top - 0.08) if bot == 'slab' else (bot if bot is not None else -10.0)
                 self.surf.append((x, y, top, b, gx, gy, vib, zi, layer))
 
-    def marker(self, zone, u=0.0, v=0.0):
-        self.markers.append((zone,) + self.to_world(u, v))
+    def marker(self, zone, width):
+        # Zone markers stand on the boundary line just outside the right-hand wall.
+        self.marker_at(zone, 0.0, -width / 2)
+
+    def marker_at(self, zone, u, v, base=None, yaw=None):
+        self.markers.append((zone,) + self.to_world(u, v, base))
+        self.marker_yaws.append(yaw if yaw is not None else (base[2] if base else self.yaw))
+
+    def slab(self, u0, u1, v0, v1, z0, z1, zone, thick=0.08, base=None, roll=0.0):
+        """3D record of a driveable rectangle rising z0 -> z1 along u."""
+        bx, by, byaw = base if base else (self.x, self.y, self.yaw)
+        length = math.hypot(u1 - u0, z1 - z0)
+        pitch = -math.atan2(z1 - z0, u1 - u0)
+        cx, cy = self.to_world((u0 + u1) / 2, (v0 + v1) / 2, (bx, by, byaw))
+        cz = (z0 + z1) / 2 - thick / 2 * math.cos(pitch)
+        self.slabs3d.append((cx, cy, cz, length, v1 - v0, thick, byaw, pitch, roll, zone))
 
     def wp(self, name, back=0.0):
         """Remember the current pose (optionally `back` metres earlier) as a test start."""
@@ -100,9 +118,14 @@ class Course:
         z1 = z0 if z1 is None else z1
         slope = (z1 - z0) / length
         if marker:
-            self.marker(zone)
+            self.marker(zone, width)
         self.patch(0, length, -width / 2, width / 2, zone, z=lambda u, v: z0 + slope * u,
                    grad=(slope, 0.0), bot=bot, vib=vib, layer=layer)
+        if z0 > 0.005 or z1 > 0.005:
+            self.slab(0, length, -width / 2, width / 2, z0, z1, zone)
+        if vib > 0:
+            cx, cy = self.to_world(length / 2, 0.0)
+            self.rough3d.append((cx, cy, self.yaw, length, width, z0, vib))
         if walls[0]:
             self.wall([(0, width / 2), (length, width / 2)], h=wall_h)
         if walls[1]:
@@ -111,6 +134,21 @@ class Course:
             self.rail_edges(lambda s: (self.to_world(s, 0.0), self.yaw), length, width,
                             lambda s: z0 + slope * s)
         self.advance(length)
+
+    def funnel(self, length, w0, w1, zone, marker=True):
+        """Flat lane whose walls taper from width w0 to w1."""
+        if marker:
+            self.marker(zone, w0)
+        w = max(w0, w1)
+        self.patch(0, length, -w / 2, w / 2, zone)
+        self.wall([(0, w0 / 2), (length, w1 / 2)])
+        self.wall([(0, -w0 / 2), (length, -w1 / 2)])
+        self.advance(length)
+
+    def step_walls(self, w0, w1):
+        """Close the wall step where a lane changes width."""
+        self.wall([(0, w0 / 2), (0, w1 / 2)])
+        self.wall([(0, -w0 / 2), (0, -w1 / 2)])
 
     def arc(self, radius, degrees, direction, width, zone, walls=(True, True), z0=0.0,
             z1=None, bot=None, marker=True):
@@ -121,7 +159,7 @@ class Course:
         yaw0 = self.yaw
         zi = self.zid(zone)
         if marker:
-            self.marker(zone)
+            self.marker(zone, width)
 
         def centre(s):
             phi = direction * s / radius
@@ -142,6 +180,15 @@ class Course:
                 x, y = px - math.sin(hx) * t, py + math.cos(hx) * t
                 self.surf.append((x, y, top, b, slope * math.cos(hx), slope * math.sin(hx),
                                   0.0, zi, 0))
+        if z0 > 0.005 or z1 > 0.005:
+            # Chord segments every ~5 deg, slightly overlapping, for the 3D world.
+            n = max(4, int(degrees / 5))
+            seg = length / n
+            for k in range(n):
+                (px, py), hx = centre((k + 0.5) * seg)
+                za, zb = z0 + slope * k * seg, z0 + slope * (k + 1) * seg
+                self.slab(-seg / 2 - 0.01, seg / 2 + 0.01, -width / 2, width / 2, za, zb, zone,
+                          base=(px, py, hx))
         for side, on in ((1, walls[0]), (-1, walls[1])):
             if on:
                 prev = None
@@ -150,6 +197,7 @@ class Course:
                     pt = (px - math.sin(hx) * side * width / 2, py + math.cos(hx) * side * width / 2)
                     if prev:
                         self.lines.append(prev + pt + ('bale',))
+                        self.segs3d.append((*prev, 0.0, BALE_H, *pt, 0.0, BALE_H, 'bale'))
                         for t in np.linspace(0, 1, 4):
                             self.obst.append((prev[0] + t * (pt[0] - prev[0]),
                                               prev[1] + t * (pt[1] - prev[1]), 0.0, BALE_H))
@@ -167,147 +215,185 @@ class Course:
                 y = py + math.cos(hx) * side * (width / 2 + 0.02)
                 self.obst.append((x, y, zfun(s), zfun(s) + h))
                 if prev and int(s / 0.02) % 5 == 0:
-                    self.lines.append(prev + (x, y, 'rail'))
+                    self.lines.append(prev[:2] + (x, y, 'rail'))
+                    self.segs3d.append((prev[0], prev[1], prev[2], prev[2] + h,
+                                        x, y, zfun(s), zfun(s) + h, 'rail'))
                 if int(s / 0.02) % 5 == 0:
-                    prev = (x, y)
+                    prev = (x, y, zfun(s))
 
     # ------------------------------------------------------------ the course
+    # Geometry follows the official drawing (docs/course, config/track.yaml).
+    # World frame: start/finish line at x=0, start lane heading west (-x), north = +y.
     def build(self):
-        # Start (32" lane, heading west)
-        self.start_pose = (*self.to_world(0.4, 0.0), self.yaw)
-        self.straight(3.3, 0.81, 'start')
-        # 20% ramp up to a 25" bridge, then the helix down (rails optional)
-        self.straight(3.2, 0.81, 'ramp_up', walls=(False, False), z0=0.0, z1=0.64)
-        self.straight(1.8, 0.81, 'bridge', walls=(False, False), z0=0.64, bot=0.56, layer=1)
-        self.arc(1.22, 270, +1, 1.054, 'helix', walls=(False, False), z0=0.64, z1=0.0, bot='slab')
-        # Tunnel under the bridge, then the 10 ft corridor
-        self.straight(1.8, 0.81, 'tunnel', wall_h=0.55)
+        self.start_pose = (0.35, 0.0, math.pi)          # behind the start line
+        self.straight(3.33, 0.813, 'start')
+        self.straight(3.25, 0.813, 'ramp_up', walls=(False, False), z0=0.0, z1=0.635)
+        # The bridge is the roof of the N-S tunnel; a flat landing follows before the helix.
+        self.straight(0.813, 0.813, 'bridge', walls=(False, False), z0=0.635, bot=0.555, layer=1,
+                      marker=False)
+        self.straight(0.79, 1.054, 'bridge', walls=(False, False), z0=0.635, bot='slab',
+                      marker=False)
+        self.arc(1.22, 270, +1, 1.054, 'helix', walls=(False, False), z0=0.635, z1=0.0,
+                 bot='slab', marker=False)
+        # Helix exit -> 32" funnel -> 5 ft tunnel under the bridge -> 10 ft straight.
+        self.funnel(0.81, 1.054, 0.813, 'tunnel')
+        self.tunnel_roof(1.524, 0.813)
+        self.straight(1.524, 0.813, 'tunnel', wall_h=0.55, marker=False)
         self.wp('tunnel_mid')
-        self.straight(3.05, 0.81, 'tunnel', marker=False)
-        # Narrow: 20" straight then 28" right curve (6 ft radius)
+        self.straight(3.048, 0.813, 'tunnel', marker=False)
+        # Narrow: 32" -> 20" straight, then a 28" right curve on a 6 ft radius.
         self.wp('narrow', back=1.0)
-        self.straight(2.3 + 1.2, 0.508, 'narrow')
-        self.arc(1.83, 90, -1, 0.71, 'narrow', marker=False)
-        # Gravel: 2" ramp, 4x8 ft gravel, 2" ramp down, flat
+        self.funnel(0.3, 0.813, 0.508, 'narrow')
+        self.straight(3.6, 0.508, 'narrow', marker=False)
+        self.arc(1.829, 90, -1, 0.711, 'narrow', marker=False)
+        self.step_walls(0.711, 0.813)
+        self.straight(0.95, 0.813, 'narrow', marker=False)
+        # Gravel: 2" ramp up (32"), 4x8 ft gravel box (48"), 2" ramp down (48"), flat.
         self.wp('gravel', back=0.3)
-        self.straight(0.81, 0.81, 'gravel', z0=0.0, z1=0.05)
-        self.straight(2.44, 1.22, 'gravel', z0=0.05, vib=2.5, marker=False)
-        self.straight(0.81, 1.22, 'gravel', z0=0.05, z1=0.0, marker=False)
-        self.straight(1.0, 1.22, 'gravel', marker=False)
-        # Bank approach (flat, funnel simplified to a straight lane)
+        self.straight(0.813, 0.813, 'gravel', z0=0.0, z1=0.051)
+        self.step_walls(0.813, 1.219)
+        self.straight(2.438, 1.219, 'gravel', z0=0.051, vib=2.5, marker=False)
+        self.straight(0.813, 1.219, 'gravel', z0=0.051, z1=0.0, marker=False)
+        self.straight(0.95, 1.219, 'gravel', marker=False)
         self.wp('bank_approach')
-        self.straight(4.0, 1.22, 'bank_approach')
-        self.wp('bank_uturn')
         self.build_bank()
-        # Pothole lane (continues west from the bank return lane)
-        self.straight(0.81, 1.22, 'pothole', z0=0.0, z1=0.038)
-        self.straight(2.44, 1.22, 'pothole', z0=0.038, vib=4.5, marker=False)
-        self.straight(0.81, 1.22, 'pothole', z0=0.038, z1=0.0, marker=False)
+        # Pothole: 1.5" ramp up (32"), 8 ft pothole box (48"), 1.5" ramp down (48").
+        self.straight(0.813, 0.813, 'pothole', z0=0.0, z1=0.038)
+        self.step_walls(0.813, 1.219)
+        self.straight(2.438, 1.219, 'pothole', z0=0.038, vib=4.5, marker=False)
+        self.straight(0.813, 1.219, 'pothole', z0=0.038, z1=0.0, marker=False)
         self.wp('wide', back=0.3)
         self.build_wide_buckets_hoops()
 
+    def tunnel_roof(self, length, width):
+        """3-D only: closed top over the tunnel (the bridge deck covers its south end)."""
+        cx, cy = self.to_world(length / 2, 0.0)
+        self.slabs3d.append((cx, cy, 0.60, length, width + 0.3, 0.06, self.yaw, 0.0, 0.0, 'tunnel'))
+
     def build_bank(self):
-        base = (self.x, self.y, self.yaw)
+        """48" x 128" plane rising 8.5 deg away from two diverging lanes split by a divider.
+        Local frame B: u = east along the entry lane from the zone line, v = north."""
+        B = (self.x, self.y, self.yaw)
+        L, depth = 2.6, 1.219
         tan = math.tan(math.radians(8.5))
-        # Open apron + 48" x 128" plane rising away from the lanes; no walls.
-        self.patch(0.0, 0.3, -2.4, 0.9, 'bank_uturn', base=base)
-        self.patch(0.3, 1.52, -2.39, 0.87, 'bank_uturn', z=lambda u, v: (u - 0.3) * tan,
-                   grad=(tan, 0.0), base=base)
-        # Divider between entry lane (v=0) and return lane (v=-1.37), post at its end.
-        self.wall([(-2.4, -0.61), (0.0, -0.61)], base=base)
-        self.wall([(-2.4, -0.76), (0.0, -0.76)], base=base)
-        self.disc(0.0, -0.685, 0.15, BALE_H, 'post', base=base)
-        self.wall([(-2.4, -1.98), (0.0, -1.98)], base=base)
-        self.markers.append(('bank_uturn',) + self.to_world(0.0, 0.0, base))
-        # Return lane back toward the wide section.
-        self.x, self.y = self.to_world(0.0, -1.37, base)
-        self.yaw = base[2] + math.pi
-        self.straight(1.0, 1.22, 'pothole', walls=(False, False))
+        self.marker_at('bank_approach', 0.0, -0.66, B)
+        self.patch(0.0, L, -0.45, 1.15, 'bank_approach', base=B)
+        self.patch(0.0, L, -2.3, -0.45, 'bank_uturn', base=B)
+        self.wall([(0.0, 0.61), (L, 1.13)], base=B)
+        self.wall([(0.0, -0.61), (L, -0.2)], base=B)
+        self.wall([(0.0, -1.09), (L, -0.66)], base=B)
+        self.disc(L, -0.43, 0.23, BALE_H, 'post', base=B)
+        self.wall([(0.0, -1.90), (L, -2.27)], base=B)
+        self.patch(L, L + depth, -2.17, 1.08, 'bank_uturn', z=lambda u, v: (u - L) * tan,
+                   grad=(tan, 0.0), base=B)
+        self.slab(L, L + depth, -2.17, 1.08, 0.0, depth * tan, 'bank_uturn', thick=0.25, base=B)
+        self.bank_box = (*self.to_world(L + depth / 2, -0.545, B), B[2], depth / 2, 1.625)
+        self.waypoints['bank_uturn'] = (*self.to_world(L - 1.0, 0.4, B), B[2])
+        # Return lane: 32" at the zone line, heading west.
+        self.x, self.y = self.to_world(0.0, -1.495, B)
+        self.yaw = B[2] + math.pi
 
     def build_wide_buckets_hoops(self):
-        # ---- Wide section: local u = forward (west), v = left (south)
-        A = (self.x, self.y, self.yaw)
-        self.markers.append(('wide',) + self.to_world(0.0, 0.0, A))
-        self.patch(0.0, 3.35, -0.7, 7.0, 'wide', base=A)
-        self.wall([(0.0, -0.61), (0.0, -0.7), (3.35, -0.7), (3.35, 7.0), (-0.0, 7.0)], base=A)
-        # East wall: zig-zag decoy (closed notches); the bucket-field entrance can be
-        # anywhere on the start line (v 3.4-7.0), 0.9 m wide.
-        gap_c = 6.35 if self.seed == 0 else float(self.rng.uniform(3.95, 6.45))
-        self.gap_center = gap_c
-        self.wall([(0.0, 0.61), (0.0, 1.0), (0.7, 1.5), (0.0, 2.0), (0.7, 2.5), (0.0, 3.0),
-                   (0.0, gap_c - 0.45)], base=A)
-        self.wall([(0.0, gap_c + 0.45), (0.0, 7.0)], base=A)
-        # West-wall stubs and the V decoy that opens north
-        self.wall([(3.35, 2.0), (2.6, 2.0)], base=A)
-        self.wall([(3.35, 4.0), (2.7, 4.3)], base=A)
-        self.wall([(0.65, 6.2), (1.35, 7.0), (2.6, 6.2)], base=A)
+        """Fixed world coordinates scaled off the drawing; the pothole lane ends at ~(-3.3, 8.4)."""
+        W = (0.0, 0.0, 0.0)
+        rng = self.rng
+        px, py = self.x, self.y
+        # ---- Wide section, entered heading west at its NE corner; turn left (south).
+        self.marker_at('wide', px, py + 0.66, W, yaw=math.pi)
+        west, south, east = -6.3, 0.85, -2.96
+        self.patch(west, px, south, 9.3, 'wide', base=W)
+        self.wall([(west, south), (west, 9.27)], base=W)
+        self.wall([(west, south), (east, south)], base=W)
+        # Changeable boundaries: zig-zag decoy under the pothole lane, west-wall stubs,
+        # an inverted-V decoy on the south wall.
+        self.wall([(px, py - 0.61), (east, 7.5), (east - 0.65, 7.0), (east, 6.5),
+                   (east - 0.65, 6.0), (east, 5.5), (east, 4.98)], base=W)
+        s1 = 7.0 if self.seed == 0 else float(rng.uniform(6.0, 7.6))
+        s2 = 4.4 if self.seed == 0 else float(rng.uniform(3.0, 5.0))
+        self.wall([(west, s1), (west + 0.8, s1)], base=W)
+        self.wall([(west, s2), (west + 0.6, s2 + 0.2)], base=W)
+        vx = -4.45 if self.seed == 0 else float(rng.uniform(-5.5, -4.0))
+        self.wall([(vx - 0.45, south), (vx, south + 0.8), (vx + 0.45, south)], base=W)
 
-        # ---- Bucket field east of the gap: local a = east (-u), b = v
-        self.markers.append(('buckets',) + self.to_world(0.0, gap_c, A))
-        self.waypoints['buckets'] = (*self.to_world(-0.1, gap_c, A), A[2] + math.pi)
-        self.patch(-3.6, 0.0, 3.4, 7.0, 'buckets', base=A)
-        self.wall([(0.0, 3.4), (-3.6, 3.4), (-3.6, 5.5)], base=A)
-        self.wall([(-3.6, 6.4), (-3.6, 7.0), (0.0, 7.0)], base=A)
-        self.buckets = self.place_buckets(gap_c)
+        # ---- Bucket field: local a = east from its west wall, b = north from its south wall.
+        depth, span = 3.67, 4.13
+        F = (east, south, 0.0)
+        hoop_y0, hoop_y1 = 1.36, 3.19
+        gap_b = 0.6 if self.seed == 0 else float(rng.uniform(0.55, span - 0.55))
+        exit_lo, exit_hi = hoop_y0 - south + 0.46, hoop_y1 - south - 0.46
+        exit_b = 1.42 if self.seed == 0 else float(rng.uniform(exit_lo, exit_hi))
+        self.gap_center = gap_b
+        self.exit_center = exit_b
+        self.patch(0.0, depth, 0.0, span, 'buckets', base=F)
+        self.wall([(0.0, span), (0.0, gap_b + 0.45)], base=F)
+        self.wall([(0.0, gap_b - 0.45), (0.0, 0.0)], base=F)
+        self.wall([(0.0, span), (depth, span), (depth, exit_b + 0.457)], base=F)
+        self.wall([(depth, exit_b - 0.457), (depth, 0.0)], base=F)
+        self.marker_at('buckets', 0.0, gap_b - 0.5, F)
+        self.waypoints['buckets'] = (*self.to_world(0.1, gap_b, F), 0.0)
+        self.buckets = self.place_buckets(gap_b, exit_b, depth, span)
         for a, b in self.buckets:
-            self.disc(-a, b, 0.15, 0.37, 'bucket', base=A)
-        # 36" connector east to the hoop lane
-        self.patch(-4.6, -3.6, 5.5, 6.4, 'hoops', base=A)
-        self.wall([(-3.6, 5.5), (-4.6, 5.5)], base=A)
-        self.wall([(-3.6, 6.4), (-4.6, 6.4)], base=A)
+            self.disc(a, b, 0.15, 0.37, 'bucket', base=F)
 
-        # ---- Hoops: local x = east along the lane, y = left (north)
-        hx, hy = self.to_world(-4.6, 5.95, A)
-        H = (hx, hy, A[2] + math.pi)
-        self.waypoints['hoops'] = (*self.to_world(-0.6, 0.0, H), H[2])
-        self.markers.append(('hoops',) + self.to_world(0.0, 0.0, H))
-        self.patch(0.0, 5.3, -0.915, 0.915, 'hoops', base=H)
-        self.wall([(0.0, 0.455), (0.0, 0.915), (5.3, 0.915)], base=H)
-        self.wall([(0.0, -0.455), (0.0, -0.915), (5.3, -0.915), (3.8, -2.69), (-3.2, -2.69)],
-                  base=H)
-        # U-turn: outer arc centred (5.3, -1.8), r = 2.72
-        cx, cy, r = 5.3, -1.8, 2.72
-        arc_pts = [(cx + r * math.cos(t), cy + r * math.sin(t))
-                   for t in np.linspace(math.pi / 2, -math.pi / 2, 25)]
-        self.wall(arc_pts + [(4.6, -3.91), (-3.2, -3.91)], base=H)
-        self.patch(5.3, 8.02, -4.52, 0.915, 'hoops', base=H)
-        self.patch(-3.2, 5.3, -3.91, -2.69, 'car_wash', base=H)
-        hw = self.hoop_width / 2
-        # Hoops anywhere on their dashed lines (legs stay inside the lane).
-        for x in (2.44, 4.88):
-            y = float(self.rng.uniform(-0.915 + hw + 0.05, 0.915 - hw - 0.05))
-            self.disc(x, y + hw, 0.025, 0.9, 'hoop', base=H)
-            self.disc(x, y - hw, 0.025, 0.9, 'hoop', base=H)
-        x3 = float(self.rng.uniform(5.3 + hw + 0.1, 5.3 + 2.4 - hw))
-        self.disc(x3 - hw, -0.915, 0.025, 0.9, 'hoop', base=H)
-        self.disc(x3 + hw, -0.915, 0.025, 0.9, 'hoop', base=H)
-        self.hoops = [self.to_world(2.44, 0, H), self.to_world(4.88, 0, H), self.to_world(x3, -0.915, H)]
+        # ---- 36" connector, then the 72" hoop lane heading east.
+        ex, ey = self.to_world(depth, exit_b, F)
+        lane_x0 = ex + 0.83
+        self.patch(ex, lane_x0, ey - 0.457, ey + 0.457, 'hoops', base=W)
+        self.wall([(ex, ey + 0.457), (lane_x0, ey + 0.457), (lane_x0, hoop_y1)], base=W)
+        self.wall([(ex, ey - 0.457), (lane_x0, ey - 0.457), (lane_x0, hoop_y0)], base=W)
+        self.marker_at('hoops', ex, ey - 0.5, W, yaw=0.0)
+        self.waypoints['hoops'] = (ex - 0.3, ey, 0.0)
+        ux, uy, ur = 7.1, 0.31, 2.88                   # U-turn outer wall
+        tip = (7.57, -0.12)                            # divider tip
+        self.patch(lane_x0, ux, hoop_y0, hoop_y1, 'hoops', base=W)
+        self.patch(ux - 2.0, ux + ur, uy - ur, hoop_y1, 'hoops', base=W)
+        self.wall([(lane_x0, hoop_y1), (ux, hoop_y1)], base=W)
+        self.wall([(ux + ur * math.cos(t), uy + ur * math.sin(t))
+                   for t in np.linspace(math.atan2(hoop_y1 - uy, 0.0), -math.pi / 2, 30)], base=W)
+        self.wall([(lane_x0, hoop_y0), (5.2, hoop_y0), tip, (5.2, 0.61), (0.85, 0.61), (0.0, 0.405)],
+                  base=W)
+        self.wall([(ux, uy - ur), (5.0, -0.61), (0.85, -0.61), (0.0, -0.405)], base=W)
+        self.hoops = []
+        for hx in (lane_x0 + 2.438, lane_x0 + 4.876):
+            w = 0.635 if self.seed == 0 else float(rng.uniform(0.51, 0.76))
+            hy = float(rng.uniform(hoop_y0 + w / 2 + 0.1, hoop_y1 - w / 2 - 0.1))
+            self.disc(hx, hy + w / 2, 0.025, 0.9, 'hoop', base=W)
+            self.disc(hx, hy - w / 2, 0.025, 0.9, 'hoop', base=W)
+            self.hoops.append((hx, hy))
+        w = 0.635 if self.seed == 0 else float(rng.uniform(0.51, 0.76))
+        x3 = float(rng.uniform(tip[0] + 0.25 + w / 2, ux + ur - w / 2 - 0.15))
+        self.disc(x3 - w / 2, tip[1], 0.025, 0.9, 'hoop', base=W)
+        self.disc(x3 + w / 2, tip[1], 0.025, 0.9, 'hoop', base=W)
+        self.hoops.append((x3, tip[1]))
 
-        # ---- Car wash (ribbons) and finish, heading west along the lane
-        self.markers.append(('car_wash',) + self.to_world(2.4, -3.3, H))
-        cwx, cwy = self.to_world(1.0, -3.3, H)
-        self.noise_boxes.append((cwx, cwy, H[2], 1.2, 0.61))
-        fx, fy = self.to_world(-3.0, -3.3, H)
-        self.finish = (fx, fy, H[2], 0.2, 0.61)
-        self.markers.append(('finish',) + self.to_world(-2.0, -3.3, H))
+        # ---- Car wash (48", ribbons) heading west, 48" -> 32" funnel to the finish line.
+        self.patch(0.0, 5.2, -0.61, 0.61, 'car_wash', base=W)
+        self.marker_at('car_wash', 4.97, 0.66, W, yaw=math.pi)
+        self.waypoints['car_wash'] = (5.4, -0.1, math.pi)
+        self.noise_boxes.append((2.885, 0.0, math.pi, 1.12, 0.61))
+        self.finish = (0.0, 0.0, math.pi, 0.15, 0.5)
+        self.marker_at('finish', 0.85, 0.66, W, yaw=math.pi)
 
     # ------------------------------------------------------------ randomisation
-    def place_buckets(self, gap_c, field=(3.6, 3.4, 7.0), exit_b=(5.5, 6.4), clear=0.35):
+    def place_buckets(self, gap_b, exit_b, depth, span, clear=0.35):
         """2-9 buckets (a = depth into field, b = across) with a guaranteed path
         at least `clear` wide from the entrance gap to the exit. Seed 0 = drawing."""
         if self.seed == 0:
-            return [(0.9, 4.0), (2.1, 4.0), (3.0, 4.1), (1.2, 6.5), (2.3, 5.4), (2.9, 6.6)]
-        depth, b0, b1 = field
+            return [(0.84, 3.18), (1.79, 3.18), (2.73, 3.18), (2.91, 1.85), (0.85, 1.30), (2.40, 1.17)]
         need = clear / 2 + 0.15 + 0.10      # half path + bucket radius + truck half width
         for _ in range(500):
             n = int(self.rng.integers(2, 10))
-            pts = [(float(self.rng.uniform(0.5, depth - 0.4)), float(self.rng.uniform(b0 + 0.3, b1 - 0.3)))
+            pts = [(float(self.rng.uniform(0.5, depth - 0.4)), float(self.rng.uniform(0.3, span - 0.3)))
                    for _ in range(n)]
             if any(math.hypot(p[0] - q[0], p[1] - q[1]) < 0.45 for i, p in enumerate(pts) for q in pts[:i]):
                 continue
-            if self._path_exists(pts, gap_c, exit_b, field, need):
+            # A car can't sidestep at the mouths: keep the entrance and exit approaches open.
+            if any(math.hypot(a, b - gap_b) < 0.9 or math.hypot(depth - a, b - exit_b) < 0.9
+                   for a, b in pts):
+                continue
+            if self._path_exists(pts, gap_b, (exit_b - 0.457, exit_b + 0.457), (depth, 0.0, span), need):
                 return pts
-        return [(1.8, b0 + 0.6), (1.8, b1 - 0.6)]
+        return [(1.8, 0.6), (1.8, span - 0.6)]
 
     @staticmethod
     def _path_exists(pts, gap_c, exit_b, field, need, res=0.05):

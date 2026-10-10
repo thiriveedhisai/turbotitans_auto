@@ -20,5 +20,9 @@ setup(
     maintainer_email='user@example.com',
     description='2.5-D obstacle-course simulator for tt_obstacle_course.',
     license='Apache-2.0',
-    entry_points={'console_scripts': ['course_sim = tt_course_sim.course_sim:main']},
+    entry_points={'console_scripts': [
+        'course_sim = tt_course_sim.course_sim:main',
+        'ackermann_to_gz = tt_course_sim.ackermann_to_gz:main',
+        'gz_referee = tt_course_sim.gz_referee:main',
+    ]},
 )

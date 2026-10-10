@@ -1,0 +1,70 @@
+# Fixed course layout: organiser spec + official drawings (2026-10). Zone ORDER and lane
+# geometry are constant; the wide-section boundaries, bucket entrance/exit, buckets and hoop
+# positions change. Metres (original inches in comments). Values marked ~ are scaled off
+# the drawing (+-10%): measure on the day.
+# Zone markers sit on the zone boundary lines at ~0.25-0.30 m height (camera height).
+
+course_size: [19.81, 14.63]       # 65 ft x 48 ft
+start_finish_shared: true         # finish line is the start line, approached from the car wash
+
+zones:
+  - name: start
+    width: 0.813                  # 32"
+    length: 3.33                  # ~131" start line -> ramp boundary
+  - name: ramp_up
+    width: 0.813
+    length: 3.25                  # ~128" at 20 %
+    grade: 0.20
+    bridge_height: 0.635          # 25"
+    bridge_length: 0.813          # 32": the bridge is the roof of the tunnel
+    landing_length: 0.79          # ~31" flat at bridge height before the helix arc
+  - name: helix
+    direction: left
+    turn_deg: 270
+    centerline_radius: 1.22       # ~4 ft
+    width: 1.054                  # 41.5"
+    grade: -0.11
+    rail_height: 0.15             # ~6"
+    exit_funnel_length: 0.81      # ~32", 41.5" -> 32" into the tunnel
+  - name: tunnel
+    width: 0.813
+    length: 1.524                 # 5 ft, closed top and sides, may be RF blocking/reflective foil
+  - name: straight
+    width: 0.813
+    length: 3.048                 # 10 ft
+  - name: narrow
+    width: 0.508                  # 20"
+    length: 1.9                   # ~6 ft straight
+    turn: {direction: right, deg: 90, centerline_radius: 1.829, width: 0.711}   # 6 ft, 28"
+  - name: gravel
+    ramp_up: {height: 0.051, width: 0.813, length: 0.813}     # 2" x 32" x 32"
+    box: [2.438, 1.219]           # 8 ft x 4 ft, 1.5" deep pea gravel
+    ramp_down: {height: 0.051, width: 1.219, length: 0.813}   # 2" x 48" x 32"
+  - name: bank_uturn
+    direction: right
+    plane: {depth: 1.219, span: 3.251, incline_deg: 8.5}      # 48" x 128", rises away from lanes
+    divider_tip_radius: 0.23      # ~9"
+    return_lane_length: 2.438     # 96" flat from the plane edge to the boundary line
+    drawn_turn_radius: 0.86       # ~34"
+  - name: pothole
+    ramp_up: {height: 0.038, width: 0.813, length: 0.813}     # 1.5" x 32" x 32"
+    box_width: 1.219              # ~48", 0.75" holes and bumps, ~6" diameter
+    ramp_down: {height: 0.038, width: 1.219, length: 0.813}   # 1.5" x 48" x 32"
+  - name: wide
+    entry_turn: left
+    size: [3.353, 7.925]          # 11 ft x 26 ft, boundaries (decoy bales) change
+  - name: buckets
+    entrance_wall: left           # anywhere on the field's west boundary
+    exit_wall: opposite           # anywhere on the east wall
+    exit_width: 0.914             # 36"
+    bucket_diameter: 0.30         # 5 gal
+    count: [2, 9]
+  - name: hoops
+    lane_width: 1.829             # 72"
+    hoop_spacing: 2.438           # 96": bucket exit -> hoop 1 -> hoop 2
+    leg_spacing: [0.51, 0.76]     # 20-30" between legs, no lidar-visible top bar
+    uturn: right                  # hoop 3 across the U-turn, passed heading south
+  - name: car_wash
+    width: 1.219                  # 48", ribbons: drive straight centred, ignore them; length unknown
+  - name: finish
+    funnel: [1.219, 0.813]        # 48" -> 32" to the finish line

@@ -46,8 +46,8 @@ class CourseSim(Node):
         super().__init__('course_sim')
         p = lambda n, d: self.declare_parameter(n, d).value  # noqa: E731
         self.seed = int(p('seed', 0))
-        self.course = Course(rails=bool(p('rails', True)), seed=self.seed,
-                             hoop_width=float(p('hoop_width', 0.60)))
+        self.course = Course(rails=bool(p('rails', True)), seed=self.seed)
+        self.reached_car_wash = False
         self.true_radius = float(p('true_min_turn_radius', 1.52))
         self.max_steer = float(p('max_steer_cmd', 0.5))
         self.servo_tau = float(p('servo_tau', 0.08))
@@ -209,7 +209,9 @@ class CourseSim(Node):
         if self.race_t is not None and self.steps % 5 == 0:
             self.traj.append((round(self.race_time(), 2), round(self.x, 3), round(self.y, 3),
                               round(self.v, 2), self.zone, self.mission_zone or ''))
-        if self.course.in_box(self.course.finish, self.x, self.y):
+        if self.zone == 'car_wash':
+            self.reached_car_wash = True
+        if self.reached_car_wash and self.course.in_box(self.course.finish, self.x, self.y):
             self.finish('finished')
 
     # -------------------------------------------------------------- sensors

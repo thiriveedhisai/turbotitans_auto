@@ -37,6 +37,8 @@ class SpeedGovernor(TTNode):
         self.corridor = float(p('vehicle.width', 0.20)) / 2.0 + float(p('corridor_margin', 0.08))
         self.front_overhang = float(p('vehicle.lidar_to_front', 0.20))
         self.rear_overhang = float(p('vehicle.lidar_to_rear', 0.30))
+        # Rotation centre for the swept-arc check: rear axle, this far behind the lidar.
+        self.axle_back = float(p('vehicle.lidar_ahead_of_axle', 0.23))
         self.slow_d = float(p('slow_distance', 0.8))
         self.stop_d = float(p('stop_distance', 0.33))
         self.rear_stop_d = float(p('rear_stop_distance', 0.33))
@@ -109,14 +111,20 @@ class SpeedGovernor(TTNode):
             v = clamp(v, -v_lat, v_lat)
 
         if self.lidar_ok and self.scan is not None and now - self.scan_t < 0.5:
+            # Check the band swept at the steering the wheels actually have now (the
+            # servo moves even while stopped), not a straight strip: a wall alongside
+            # while steering away from it is not an obstacle.
+            k = self.steering.steer_to_curvature(self.out_s)
             if v > 0:
                 # front_half_angle_deg only defines how wide the car-wash blind cone may get.
                 if self.ignore_front < self.front_half:
                     d = self.scan.corridor_clearance(self.corridor, True, self.ignore_front,
-                                                     min_x=self.front_overhang)
+                                                     min_x=self.front_overhang, curvature=k,
+                                                     axle_back=self.axle_back)
                     v = self.collision_cap(v, d, self.stop_d)
             elif v < 0:
-                d = self.scan.corridor_clearance(self.corridor, False, min_x=self.rear_overhang)
+                d = self.scan.corridor_clearance(self.corridor, False, min_x=self.rear_overhang,
+                                                 curvature=k, axle_back=self.axle_back)
                 v = -self.collision_cap(-v, d, self.rear_stop_d)
         return v
 

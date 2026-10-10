@@ -19,8 +19,9 @@
       ground_clearance: 0.076
       lidar_to_front: 0.20             # MEASURE lidar centre to front bumper
       lidar_to_rear: 0.30              # MEASURE lidar centre to rear bumper
-      # Re-measure after the servo power fix; the helix needs <= ~1.5 m.
-      planning_min_turn_radius: 1.52
+      lidar_ahead_of_axle: 0.23        # MEASURE lidar centre ahead of the rear axle (turn centre)
+      # 3.5 ft target after the servo fix; launch arg turn_radius overrides everywhere.
+      planning_min_turn_radius: 1.07
       max_steer_cmd: 0.5               # must equal rc_car_controller max_steering_angle
 
 # ------------------------------------------------ real-world speed/steer calibration
@@ -115,9 +116,13 @@ course_perception:
     min_gap_width_margin: 0.25         # opening must be vehicle.width + this
     min_gap_depth_beyond: 1.5          # range past the wall line; rejects closed notches
     gap_max_angle_deg: 110.0           # ignore openings behind (e.g. the lane just left)
-    gate_width: 0.60                   # MEASURE hoop leg spacing
-    hoop_post_spacing_tol: 0.10
+    front_gap_min_width: 0.6           # bucket-field exit is 36"
+    front_gap_max_width: 1.4
+    front_gap_depth_beyond: 1.0
+    gate_width: 0.635                  # hoop legs 20-30" apart (organiser): 25" +- 5"
+    hoop_post_spacing_tol: 0.13
     post_max_extent: 0.15
+    post_isolation: 0.12               # hoops can stand ~0.2 m from a bale wall
     persist_scans: 3
     match_distance: 0.3
 
@@ -130,9 +135,7 @@ behavior_executor:
       kp: 2.0
       kd: 0.1
     wall_center:
-      kp: 1.2
-      kd: 0.15
-      lookahead: 0.8
+      lookahead: 0.0                   # m from the rear axle; 0 = 0.5 + 0.6 * speed (0.7-1.4)
     gap_follow:
       max_range: 3.0
       bubble_radius: 0.30

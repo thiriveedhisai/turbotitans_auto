@@ -44,6 +44,8 @@ class Config:
     rear_overhang: float = 0.30   # lidar to rear bumper (m)
     odom_to_front: float = 0.05   # odometry point (camera) to front bumper
     odom_to_rear: float = 0.45    # odometry point (camera) to rear bumper
+    axle_back: float = 0.23       # rear axle (turn centre) behind the lidar
+    camera_ahead: float = 0.15    # odometry point (camera) ahead of the lidar
 
     def g(self, group, key, default):
         return self.gains.get(group, {}).get(key, default)
@@ -103,7 +105,7 @@ class Hold(Behavior):
 class HeadingHold(Behavior):
     """Drive at a fixed heading, optionally nudged to the corridor centre.
 
-    params: speed, heading_offset_deg | heading_abs, center_gain,
+    params: speed, heading_offset_deg | heading_abs (+ abs_offset_deg), center_gain,
             center_max_width, distance, lateral_offset (m, + left of the start
             line), line_point [x, y] (follow the line through this odom point
             instead), past_point (done once this far past line_point)
@@ -113,7 +115,8 @@ class HeadingHold(Behavior):
     def start(self, ctx):
         super().start(ctx)
         if 'heading_abs' in self.p:
-            self.target = float(self.p['heading_abs'])
+            self.target = wrap_angle(float(self.p['heading_abs'])
+                                     + float(self.p.get('abs_offset_deg', 0.0)) * DEG)
         else:
             self.target = wrap_angle(ctx.odom.yaw + float(self.p.get('heading_offset_deg', 0.0)) * DEG)
         self.origin = (ctx.odom.x, ctx.odom.y)
@@ -152,49 +155,70 @@ class HeadingHold(Behavior):
 
 
 class WallCenter(Behavior):
-    """Centre between lidar walls; follow one wall if only one is seen.
+    """Lane following: fit a line to each lidar wall, pure-pursuit the lane centre.
 
-    params: speed, wall_target, max_wall, distance, follow (center|left|right)
+    The lane width is remembered, so a missing wall (gap, end of a bale) falls
+    back to the other wall at half that width. No walls: hold the last heading.
+    params: speed, follow (center|left|right), wall_target (one-wall distance),
+            max_wall (ignore walls farther than this), offset (+ left of centre),
+            lookahead (m from the rear axle; default grows with speed), distance
     """
     name = 'wall_center'
 
     def start(self, ctx):
         super().start(ctx)
-        self.prev_err = None
         self.hold_yaw = ctx.odom.yaw
+        self.width = None
+
+    def lane_centre(self, ctx, speed):
+        """(target_x, target_y) in the lidar frame, or None."""
+        follow = self.p.get('follow', 'center')
+        max_wall = float(self.p.get('max_wall', 1.0))
+        target = float(self.p.get('wall_target', 0.4))
+        look = float(self.p.get('lookahead', self.cfg.g('wall_center', 'lookahead', 0.0)))
+        if look <= 0.0:
+            look = min(1.4, max(0.7, 0.5 + 0.6 * speed))
+        x_t = look - self.cfg.axle_back
+        front = ctx.scan.corridor_clearance(self.cfg.half_width + 0.1, True,
+                                            min_x=self.cfg.front_overhang)
+        if front < look:
+            # Lane bends (or we're mis-headed) and its wall is inside the lookahead:
+            # aim into the free space instead of a centre line fitted on a stub.
+            gap = ctx.scan.follow_gap(1.5, 0.2, 0.5, min_width=2 * self.cfg.half_width + 0.1)
+            if gap is not None:
+                return gap[1] * math.cos(gap[0]), gap[1] * math.sin(gap[0])
+        walls = ctx.scan.lane_walls(max_half_width=max_wall,
+                                    x_max=max(0.6, min(1.6, front - 0.15)))
+        left = walls[1] if follow != 'right' else None
+        right = walls[-1] if follow != 'left' else None
+        at = lambda w: w[0] + w[1] * x_t + w[3] * x_t * x_t  # noqa: E731
+        tilt = lambda w: math.sqrt(1 + (w[1] + 2 * w[3] * x_t) ** 2)  # noqa: E731
+        if left and right:
+            w = (left[0] - right[0]) / math.sqrt(1 + ((left[1] + right[1]) / 2) ** 2)
+            if 0.3 < w < 2 * max_wall:
+                self.width = w if self.width is None else 0.8 * self.width + 0.2 * w
+            y = (at(left) + at(right)) / 2
+        elif left:
+            half = self.width / 2 if (follow == 'center' and self.width) else target
+            y = at(left) - half * tilt(left)
+        elif right:
+            half = self.width / 2 if (follow == 'center' and self.width) else target
+            y = at(right) + half * tilt(right)
+        else:
+            return None
+        return x_t, y + float(self.p.get('offset', 0.0))
 
     def step(self, ctx, dt):
         speed = float(self.p.get('speed', 0.6))
-        kp = self.cfg.g('wall_center', 'kp', 1.2)
-        kd = self.cfg.g('wall_center', 'kd', 0.15)
-        look = self.cfg.g('wall_center', 'lookahead', 0.8)
-        max_wall = float(self.p.get('max_wall', 2.0))
-        target = float(self.p.get('wall_target', 0.4))
         status = DONE if self.distance_done(ctx) else RUNNING
-
-        left = right = None
-        if ctx.lidar_ok and ctx.scan is not None:
-            follow = self.p.get('follow', 'center')
-            if follow != 'right':
-                left = ctx.scan.wall_estimate(+1, lookahead=look, max_range=max_wall)
-            if follow != 'left':
-                right = ctx.scan.wall_estimate(-1, lookahead=look, max_range=max_wall)
-        if left and right:
-            err = (left[0] - right[0]) / 2.0
-        elif left:
-            err = left[0] - target
-        elif right:
-            err = target - right[0]
-        else:
+        tgt = self.lane_centre(ctx, speed) if (ctx.lidar_ok and ctx.scan is not None) else None
+        if tgt is None:
             # No walls (e.g. on a ramp): keep the last good heading.
             kappa = 2.0 * wrap_angle(self.hold_yaw - ctx.odom.yaw)
-            self.prev_err = None
             return Command(speed, self.steer_for(kappa), status, 'no_walls')
-
         self.hold_yaw = ctx.odom.yaw
-        derr = 0.0 if self.prev_err is None or dt <= 0 else (err - self.prev_err) / dt
-        self.prev_err = err
-        kappa = kp * err + kd * derr
+        dx, dy = tgt[0] + self.cfg.axle_back, tgt[1]
+        kappa = 2.0 * dy / (dx * dx + dy * dy)
         return Command(speed, self.steer_for(kappa), status)
 
 
@@ -410,6 +434,148 @@ class ArcTurn(Behavior):
         return Command(speed, self.steer_for(kappa), RUNNING, self.warning)
 
 
+class PlanDrive(Behavior):
+    """Plan a forward/reverse full-lock path (Hybrid-A*) to a goal pose on lidar
+    returns accumulated in the odom frame, and track it with pure pursuit on the rear
+    axle. Replans when new returns block the path.
+
+    params: goal [x, y, yaw] (camera pose, odom frame), speed, reverse_speed,
+            goal_tol, margin (search window around start and goal), allow_reverse
+    """
+    name = 'plan_drive'
+    self_recovers = True       # stalls are handled here by replanning, not by blind backing off
+
+    def start(self, ctx):
+        super().start(ctx)
+        from tt_obstacle_course.planner import Footprint, ObstacleMap
+        self.a = self.cfg.axle_back + self.cfg.camera_ahead
+        self.map = ObstacleMap()
+        self.fp_rear, self.fp_front = self.cfg.odom_to_rear - self.a, self.a + self.cfg.odom_to_front
+        self.fp = Footprint(rear=self.fp_rear, front=self.fp_front, half_width=self.cfg.half_width)
+        self.path = None
+        self.i = 0
+        self.fails = 0
+        self.t_plan = -1e9
+        self.t_check = 0.0
+        self.stall_since = None
+        if 'goal' not in self.p:
+            self.goal = None
+            return
+        gx, gy, gyaw = (float(v) for v in self.p['goal'])
+        self.goal_cam = (gx, gy, gyaw)
+        self.goal = (gx - self.a * math.cos(gyaw), gy - self.a * math.sin(gyaw), gyaw)
+
+    def rear(self, ctx):
+        o = ctx.odom
+        return o.x - self.a * math.cos(o.yaw), o.y - self.a * math.sin(o.yaw), o.yaw
+
+    def grid(self, rear):
+        m = float(self.p.get('margin', 1.5))
+        xs, ys = (rear[0], self.goal[0]), (rear[1], self.goal[1])
+        return self.map.inflated(min(xs) - m, min(ys) - m, max(xs) + m, max(ys) + m, self.fp.radius)
+
+    def replan(self, ctx, rear):
+        from tt_obstacle_course.planner import Footprint, plan
+        self.t_plan = ctx.t
+        radius = self.cfg.steering.min_turn_radius
+        reverse = bool(self.p.get('allow_reverse', True))
+        self.path = plan(rear, self.goal, self.grid(rear), self.fp, radius, allow_reverse=reverse)
+        if self.path is None:
+            # Already inside the safety margin (e.g. nose at a wall end): retry with the
+            # bare body so the search can back out.
+            tight = Footprint(rear=self.fp_rear, front=self.fp_front,
+                              half_width=self.cfg.half_width, margin=0.0)
+            m = float(self.p.get('margin', 1.5))
+            xs, ys = (rear[0], self.goal[0]), (rear[1], self.goal[1])
+            grid = self.map.inflated(min(xs) - m, min(ys) - m, max(xs) + m, max(ys) + m, tight.radius)
+            self.path = plan(rear, self.goal, grid, tight, radius, allow_reverse=reverse)
+        self.i = 0
+        if self.path is None:
+            self.fails += 1
+
+    def step(self, ctx, dt):
+        o = ctx.odom
+        if self.goal is None:
+            return Command(0.0, 0.0, FAILED, 'no goal')
+        if ctx.lidar_ok and ctx.scan is not None:
+            lx = o.x - self.cfg.camera_ahead * math.cos(o.yaw)
+            ly = o.y - self.cfg.camera_ahead * math.sin(o.yaw)
+            self.map.add_scan(ctx.scan, lx, ly, o.yaw)
+        gx, gy, gyaw = self.goal_cam
+        if (math.hypot(gx - o.x, gy - o.y) <= float(self.p.get('goal_tol', 0.25))
+                and abs(wrap_angle(gyaw - o.yaw)) <= 0.4):
+            return Command(0.0, 0.0, DONE)
+        rear = self.rear(ctx)
+        if self.path is None:
+            if self.fails > int(self.p.get('max_fails', 4)):
+                return Command(0.0, 0.0, FAILED, 'no path')
+            if ctx.t - self.t_plan >= 1.0:
+                self.replan(ctx, rear)
+            if self.path is None:
+                return Command(0.0, 0.0, RUNNING, 'planning')
+        elif ctx.t - self.t_check >= 0.5:
+            from tt_obstacle_course.planner import path_blocked
+            self.t_check = ctx.t
+            if path_blocked(self.path, self.grid(rear), self.fp, self.i + 1):
+                self.replan(ctx, rear)
+                if self.path is None:
+                    return Command(0.0, 0.0, RUNNING, 'replanning')
+        cmd = self.track(rear)
+        # Commanding motion but not moving (governor stop or contact): mark the cells
+        # just past the bumper in the direction of travel as blocked and replan.
+        if abs(cmd.speed) >= 0.1 and abs(o.speed) < 0.05:
+            if self.stall_since is None:
+                self.stall_since = ctx.t
+            elif ctx.t - self.stall_since > 1.2:
+                self.stall_since = None
+                d = 1.0 if cmd.speed > 0 else -1.0
+                reach = (self.fp_front if d > 0 else self.fp_rear) + 0.1
+                for lat in (-0.08, 0.0, 0.08):
+                    bx = rear[0] + d * reach * math.cos(rear[2]) - lat * math.sin(rear[2])
+                    by = rear[1] + d * reach * math.sin(rear[2]) + lat * math.cos(rear[2])
+                    self.map.cells.add((int(bx // self.map.res), int(by // self.map.res)))
+                self.replan(ctx, rear)
+                return Command(0.0, 0.0, RUNNING, 'stalled: replanning')
+        else:
+            self.stall_since = None
+        return cmd
+
+    def track(self, rear):
+        path = self.path
+        d = path[self.i][3] or 1
+        end = self.i
+        while end + 1 < len(path) and path[end + 1][3] == d:
+            end += 1
+        # Progress: nearest point on the current same-direction segment.
+        best = min(range(self.i, end + 1),
+                   key=lambda k: math.hypot(path[k][0] - rear[0], path[k][1] - rear[1]))
+        self.i = best
+        ex, ey = path[end][0], path[end][1]
+        to_end = math.hypot(ex - rear[0], ey - rear[1])
+        if self.i >= end - 1 and to_end < 0.15 and end + 1 < len(path):
+            self.i = end + 1           # cusp: switch direction
+            return Command(0.0, 0.0, RUNNING, 'cusp')
+        look = 0.45
+        tx, ty = ex, ey
+        for k in range(self.i, end + 1):
+            if math.hypot(path[k][0] - rear[0], path[k][1] - rear[1]) >= look:
+                tx, ty = path[k][0], path[k][1]
+                break
+        if end + 1 >= len(path) and to_end < look:
+            # Last segment: aim past its end along the goal heading.
+            tx += d * (look - to_end) * math.cos(path[-1][2])
+            ty += d * (look - to_end) * math.sin(path[-1][2])
+        c, s = math.cos(rear[2]), math.sin(rear[2])
+        dx, dy = tx - rear[0], ty - rear[1]
+        fx, fy = c * dx + s * dy, -s * dx + c * dy
+        kappa = 2.0 * fy / max(fx * fx + fy * fy, 1e-3)
+        if d > 0:
+            v = min(float(self.p.get('speed', 0.4)), 0.15 + to_end)
+        else:
+            v = -min(float(self.p.get('reverse_speed', 0.3)), 0.15 + to_end)
+        return Command(v, self.steer_for(kappa), RUNNING)
+
+
 class BackOff(Behavior):
     """Reverse for a distance (stuck recovery), optionally with a steering angle."""
     name = 'backoff'
@@ -425,7 +591,7 @@ class BackOff(Behavior):
 
 
 REGISTRY = {cls.name: cls for cls in
-            (Hold, HeadingHold, WallCenter, GapFollow, KTurn, ArcTurn, BackOff)}
+            (Hold, HeadingHold, WallCenter, GapFollow, KTurn, ArcTurn, PlanDrive, BackOff)}
 
 
 def make_behavior(name, params, cfg):

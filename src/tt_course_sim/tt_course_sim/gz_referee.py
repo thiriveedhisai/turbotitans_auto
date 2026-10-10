@@ -71,6 +71,9 @@ class GzReferee(Node):
         self.truth_odom = None
         self.odom_err_max = 0.0
         self.create_subscription(Odometry, p('estimate_topic', '/odom/fused'), self.on_estimate, 10)
+        self.raw_yaw = None
+        self.create_subscription(Odometry, '/zed/zed_node/odom',
+                                 lambda m: setattr(self, 'raw_yaw', quat_rpy(m.pose.pose.orientation)[2]), 10)
         self.create_subscription(Bool, '/race_start', self.on_start, VOLATILE)
         self.create_subscription(String, '/mission/state', self.on_mission, 10)
         self.create_subscription(String, '/zone_event', self.on_marker, 10)
@@ -138,10 +141,11 @@ class GzReferee(Node):
             return 0.0
         return math.hypot(self.est[0] - self.truth_odom[0], self.est[1] - self.truth_odom[1])
 
-    def yaw_err_deg(self):
-        if self.est is None or self.truth_odom is None:
+    def yaw_err_deg(self, yaw=None):
+        yaw = self.est[2] if yaw is None and self.est is not None else yaw
+        if yaw is None or self.truth_odom is None:
             return 0.0
-        d = self.est[2] - self.truth_odom[2]
+        d = yaw - self.truth_odom[2]
         return math.degrees(math.atan2(math.sin(d), math.cos(d)))
 
     def on_odom(self, msg):
@@ -172,7 +176,8 @@ class GzReferee(Node):
             self.traj.append((round(self.race_time(), 2), round(x, 3), round(y, 3), round(v, 2),
                               self.zone, self.mission_zone or '',
                               round(math.degrees(math.atan2(math.sin(yaw), math.cos(yaw))), 1),
-                              *self.cmd, round(err, 3), round(self.yaw_err_deg(), 1)))
+                              *self.cmd, round(err, 3), round(self.yaw_err_deg(), 1),
+                              round(self.yaw_err_deg(self.raw_yaw), 1) if self.raw_yaw is not None else 0.0))
 
     def on_cmd(self, msg):
         self.cmd = (round(msg.speed, 2), round(msg.steering_angle, 3))
@@ -267,7 +272,8 @@ class GzReferee(Node):
         with open(os.path.join(self.out_dir, 'result.json'), 'w') as f:
             json.dump(result, f, indent=2)
         with open(os.path.join(self.out_dir, 'trajectory.csv'), 'w') as f:
-            f.write('t,x,y,v,true_zone,mission_zone,yaw_deg,cmd_speed,cmd_steer,odom_err,yaw_err_deg\n')
+            f.write('t,x,y,v,true_zone,mission_zone,yaw_deg,cmd_speed,cmd_steer,odom_err,yaw_err_deg,'
+                    'raw_yaw_err_deg\n')
             for row in self.traj:
                 f.write(','.join(str(v) for v in row) + '\n')
         try:

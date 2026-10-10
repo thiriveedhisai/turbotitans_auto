@@ -163,9 +163,12 @@ zones:
         params: {speed: 0.7}
         until: [terrain=rough, distance>=2.8]
         after_distance: 1.0
+      # Lane end = the south wall ends into the wide area (lidar). Odometry distance
+      # is only a backstop: with VO scale error it fired 2 m early and the left turn
+      # went into the pothole wall.
       - behavior: wall_center
-        params: {speed: 0.6, distance: 3.6}
-        until: [done, marker=wide]
+        params: {speed: 0.6, distance: 5.0}
+        until: [marker=wide, open_left>=1.5, done]
 
   # 11x26 ft area with decoy bales. Turn left (south), then search the LEFT
   # wall for the bucket-zone entrance. Decoy notches fail the depth test.
@@ -180,7 +183,9 @@ zones:
       # so they fail the depth test). On a confirmed opening the onboard Hybrid-A*
       # (full-lock arcs, forward + reverse, lidar map) plans the entry around decoys;
       # if it can't, plan_turn_in lines up in the opening's frame and turns in.
-      - nav2: {goal: gap, side: left, entry: plan, inside: 0.6, turn_speed: 0.5}
+      # min_ahead: the pothole lane mouth sits just behind/abeam after the turn and
+      # read as a left gap (seed 5 drove back into it); the entrance is always ahead.
+      - nav2: {goal: gap, side: left, entry: plan, inside: 0.6, turn_speed: 0.5, min_ahead: 0.3}
         fallback:
           behavior: wall_center
           params: {speed: 0.5, follow: left, wall_target: $turn_in_offset, max_wall: 2.6}
@@ -227,7 +232,7 @@ zones:
       - behavior: arc_turn
         params: {direction: right, turn_deg: 90, radius: 1.3, speed: 0.5, allow_kturn: true}
       - gate: {beyond: 0.6, search_forward: 0.5, commit_speed: 0.5, max_approach_deg: 45, plan: true,
-               max_angle_deg: 70, expect: {max_ahead: 5.5, yaw_deg: -90}}
+               max_angle_deg: 70, max_range: 4.0, expect: {max_ahead: 5.5, yaw_deg: -90}}
       - behavior: arc_turn
         params: {direction: right, turn_deg: 90, radius: $turn_radius, speed: 0.5,
                  allow_kturn: true}

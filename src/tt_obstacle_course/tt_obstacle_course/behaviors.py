@@ -564,7 +564,7 @@ class PlanDrive(Behavior):
         if ctx.lidar_ok and ctx.scan is not None:
             lx = o.x - self.cfg.camera_ahead * math.cos(o.yaw)
             ly = o.y - self.cfg.camera_ahead * math.sin(o.yaw)
-            self.map.add_scan(ctx.scan, lx, ly, o.yaw)
+            self.map.add_scan(ctx.scan, lx, ly, o.yaw, t=ctx.t)
         gx, gy, gyaw = self.goal_cam
         tol, ytol = float(self.p.get('goal_tol', 0.25)), float(self.p.get('yaw_tol', 0.4))
         dist, dyaw = math.hypot(gx - o.x, gy - o.y), abs(wrap_angle(gyaw - o.yaw))

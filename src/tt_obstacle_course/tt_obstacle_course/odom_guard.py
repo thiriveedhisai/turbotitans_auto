@@ -2,11 +2,13 @@
 
 The ZED loses visual tracking in dark or texture-poor stretches (tunnel, car-wash
 ribbons); its position then stalls or stops publishing while the truck still moves.
-Here a dropout is declared when the truck is commanded to move, the lidar scene is
-changing (so it really is moving), but ZED position has not changed. Until tracking
-returns, the pose is dead-reckoned from the gyro (heading) and the commanded speed
-(distance); with the lidar scene static the estimate stops, so stuck recovery still
-works. When the ZED recovers, its pose is re-anchored to the dead-reckoned one (no jump).
+Here a dropout is declared when the truck is commanded to move, the lidar says it is
+moving, but ZED position has not changed. Until tracking returns, heading comes from
+the gyro and travel from lidar scan matching (along the heading, using surfaces that
+cross it); in a straight featureless lane, where the lidar can't measure travel, from
+the commanded speed. Measured ~0 (e.g. pushing against a wall) stops the estimate, so
+stuck recovery still works. When the ZED recovers, its pose is re-anchored to the
+dead-reckoned one (no jump).
 
 Subscribes: zed_odom_topic, imu_topic, /ackermann_cmd, scan_topic
 Publishes:  /odom/fused (Odometry, used by the stack), /odom/degraded (Bool),
@@ -28,7 +30,7 @@ from tf2_ros import TransformBroadcaster
 
 from tt_obstacle_course.geometry import quat_to_rpy, wrap_angle
 from tt_obstacle_course.ros_common import TTNode, run
-from tt_obstacle_course.scan_utils import ScanView
+from tt_obstacle_course.scan_utils import ScanView, scan_shift
 
 
 class OdomGuard(TTNode):
@@ -61,9 +63,16 @@ class OdomGuard(TTNode):
         self.cmd = AckermannDrive()
         self.cmd_since = None
         self.gyro_z = 0.0
+        # Heading integrated on every IMU message by its own stamp. Sampling the latest
+        # rate once per tick lost rotation whenever ticks stretched under CPU load
+        # (26 deg over the hoop turns in a 3-D run -> car wash driven into a wall).
+        self.gyro_yaw = 0.0
+        self.gyro_used = 0.0
+        self.imu_t = None
         self.imu_rp = (0.0, 0.0)
         self.scans = collections.deque()
         self.scan_moving = False
+        self.lidar_speed = None
         self.distance_dr = 0.0
         self.raw_speed = 0.0
         self.dr_speed = 0.0
@@ -79,8 +88,8 @@ class OdomGuard(TTNode):
         self.create_subscription(AckermannDrive, '/ackermann_cmd', self.on_cmd, 10)
         self.create_subscription(LaserScan, self.param('scan_topic', '/scan'), self.on_scan,
                                  qos_profile_sensor_data)
-        self.tag_gain = float(g('tag_heading_gain', 0.15))
-        self.tag_range = float(g('tag_heading_max_range', 3.0))
+        self.tag_gain = float(g('tag_heading_gain', 0.04))
+        self.tag_range = float(g('tag_heading_max_range', 2.5))
         self.create_subscription(String, '/marker/detections', self.on_tags, 10)
         self.create_timer(1.0 / 30.0, self.tick)
         self.create_timer(0.1, lambda: self.pub_flag.publish(Bool(data=self.degraded)))
@@ -106,6 +115,10 @@ class OdomGuard(TTNode):
         # Body yaw rate projected on the vertical (fine for the course's modest tilts).
         self.gyro_z = (msg.angular_velocity.z * math.cos(roll) * math.cos(pitch)
                        + msg.angular_velocity.y * math.sin(roll) - msg.angular_velocity.x * math.sin(pitch))
+        t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+        if self.imu_t is not None and 0.0 < t - self.imu_t < 0.5:
+            self.gyro_yaw += self.gyro_z * (t - self.imu_t)
+        self.imu_t = t
 
     def on_cmd(self, msg):
         moving = abs(msg.speed) >= self.cmd_min
@@ -117,17 +130,35 @@ class OdomGuard(TTNode):
 
     def on_scan(self, msg):
         t = self.now_s()
-        r = np.asarray(msg.ranges, dtype=np.float32)
-        self.scans.append((t, r))
+        view = ScanView.from_msg(msg, self.yaw_off, self.flip)
+        r = np.asarray(view.ranges, dtype=np.float32)
+        yaw = self.fused[5] if self.fused is not None else 0.0
+        self.scans.append((t, r, view.angles, yaw))
         while len(self.scans) > 2 and t - self.scans[1][0] >= self.scan_dt:
             self.scans.popleft()
-        t0, r0 = self.scans[0]
+        t0, r0, a0, yaw0 = self.scans[0]
         if t - t0 < self.scan_dt * 0.8 or r0.shape != r.shape:
             return
         ok = np.isfinite(r) & np.isfinite(r0) & (r > 0.2) & (r < 8.0) & (r0 > 0.2) & (r0 < 8.0)
         if ok.sum() < 20:
             return
-        self.scan_moving = float(np.mean(np.abs(r[ok] - r0[ok]) > self.scan_delta)) > self.scan_frac
+        # Measured travel when the scene allows it (anything across the heading: wall
+        # ends, corners, posts, a wall we're pushing against). Rocking against a wall
+        # changes many beams but measures ~0, so it no longer reads as motion.
+        shift = scan_shift((a0, r0), (view.angles, r), dyaw=wrap_angle(yaw - yaw0))
+        self.lidar_speed = None if shift is None else shift / (t - t0)
+        if self.lidar_speed is not None:
+            self.scan_moving = abs(self.lidar_speed) > 0.05
+        else:
+            # Straight featureless lane: can't measure, only tell the scene changed.
+            # Compare after undoing the rotation: pivoting in place while wedged changes
+            # most beams and read as motion (3 m of phantom travel skipped the tunnel).
+            inc = float(msg.angle_increment) or 1.0
+            k = int(round(wrap_angle(yaw - yaw0) / inc))
+            r0 = np.roll(r0, -k)
+            ok = np.isfinite(r) & np.isfinite(r0) & (r > 0.2) & (r < 8.0) & (r0 > 0.2) & (r0 < 8.0)
+            self.scan_moving = (ok.sum() >= 20 and
+                                float(np.mean(np.abs(r[ok] - r0[ok]) > self.scan_delta)) > self.scan_frac)
         self.wall_heading(msg)
 
     def wall_heading(self, msg):
@@ -160,8 +191,10 @@ class OdomGuard(TTNode):
             self.reanchor()
 
     def on_tags(self, msg):
-        """A tag on a course wall gives the wall's direction, i.e. heading mod 90 deg."""
-        if self.fused is None or self.grid is None:
+        """A tag on a course wall gives the wall's direction, i.e. heading mod 90 deg.
+        Only from good views: an oblique tag's PnP normal is noisy (flip ambiguity) and
+        once pulled the heading 13 deg off at the car-wash entry."""
+        if self.fused is None or self.grid is None or abs(self.gyro_z) > 0.05:
             return
         try:
             dets = json.loads(msg.data)
@@ -170,9 +203,12 @@ class OdomGuard(TTNode):
         for d in dets:
             if 'normal_deg' not in d or d.get('distance', 99.0) > self.tag_range:
                 continue
+            # Facing us within 35 deg (normal points back toward the camera, +-180).
+            if abs(abs(d['normal_deg']) - 180.0) > 35.0 and abs(d['normal_deg']) > 35.0:
+                continue
             face = wrap_angle(self.fused[5] + math.radians(d['normal_deg']))
             err = math.remainder(self.grid - face, math.pi / 2)
-            if abs(err) > math.radians(15.0):
+            if abs(err) > self.wall_tol:
                 continue
             self.fused[5] = wrap_angle(self.fused[5] + self.tag_gain * err)
             if not self.degraded and self.raw is not None:
@@ -204,36 +240,46 @@ class OdomGuard(TTNode):
         if self.fused is None:
             return
         t = self.now_s()
-        dt = 0.0 if self.last_t is None else min(0.2, t - self.last_t)
+        dt = 0.0 if self.last_t is None else min(0.5, t - self.last_t)
         self.last_t = t
         commanded = self.cmd_since is not None and t - self.cmd_since >= self.freeze_s
         stale = self.raw_t is None or t - self.raw_t > self.stale_s
         frozen = self.raw_moved(self.freeze_s) < self.freeze_m
+        dyaw = self.gyro_yaw - self.gyro_used
+        self.gyro_used = self.gyro_yaw
 
         if not self.degraded:
             if commanded and self.scan_moving and (stale or frozen):
                 self.degraded = True
                 # The stall began freeze_s ago: credit the distance driven since.
-                self.dead_reckon(self.freeze_s, use_gyro=False)
+                self.dead_reckon(self.freeze_s)
                 self.get_logger().warn('ZED tracking lost: dead-reckoning on gyro + commanded speed')
             else:
                 self.apply_offset()
         else:
             if not stale and self.raw_moved(0.3) > self.resume_m:
+                # VIO heading runs on through a visual dropout (IMU): resume on it unless it
+                # jumped (relocalisation), so dead-reckoned yaw error isn't locked in.
+                vio_yaw = wrap_angle(self.raw[6] + self.offset[2])
+                if abs(wrap_angle(vio_yaw - self.fused[5])) < math.radians(20.0):
+                    self.fused[5] = vio_yaw
                 self.reanchor()
                 self.degraded = False
                 self.get_logger().info(f'ZED tracking back after {self.distance_dr:.2f} m dead-reckoned')
                 self.distance_dr = 0.0
                 self.apply_offset()
             else:
-                self.dead_reckon(dt)
+                self.dead_reckon(dt, dyaw)
         self.publish()
 
-    def dead_reckon(self, dt, use_gyro=True):
-        if use_gyro:
-            self.fused[5] = wrap_angle(self.fused[5] + self.gyro_z * dt)
+    def dead_reckon(self, dt, dyaw=None):
+        if dyaw is not None:
+            self.fused[5] = wrap_angle(self.fused[5] + dyaw)
         self.fused[3], self.fused[4] = self.imu_rp
-        v = self.cmd.speed * self.speed_scale if self.scan_moving else 0.0
+        if self.lidar_speed is not None:
+            v = self.lidar_speed
+        else:
+            v = self.cmd.speed * self.speed_scale if self.scan_moving else 0.0
         self.dr_speed = v
         self.fused[0] += v * dt * math.cos(self.fused[5])
         self.fused[1] += v * dt * math.sin(self.fused[5])

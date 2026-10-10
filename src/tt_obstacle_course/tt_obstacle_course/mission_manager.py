@@ -7,7 +7,8 @@ Each zone is a list of steps. A step is one of:
         pose, then a straight blind commit through)
 A step ends when any 'until' trigger fires (default: done):
   done | failed | terrain=X | terrain!=X | left=X | marker=X | distance>=m | time>=s |
-  rise>=m | yaw>=deg | gap=left|right | walls_lost>=m | walls_end<=m | opening_ahead>=m |
+  rise>=m | yaw>=deg | gap=left|right | walls_lost>=m | open_left>=m | open_right>=m |
+  walls_end<=m | opening_ahead>=m |
   corridor<=m | exit_seen=lead | finish_funnel<=m
 Guards: after_distance (m), min_time (s). Zone timeout_s moves on regardless.
 Seeing a marker for a zone up to marker_skip_max ahead jumps straight to it.
@@ -548,6 +549,11 @@ class MissionManager(TTNode):
         if kind == 'gap':
             g = self.gaps.get(val)
             return g is not None and g[1] >= run.t0
+        if kind in ('open_left', 'open_right'):
+            # That side's wall has ended (lane opens into an area): lidar, not odometry.
+            if not self.lidar_ok or self.scan is None:
+                return False
+            return self.scan.side_distance(+1 if kind == 'open_left' else -1) >= float(val)
         if kind == 'walls_lost':
             if not self.lidar_ok or self.scan is None:
                 return False
@@ -889,7 +895,16 @@ class MissionManager(TTNode):
                 else:
                     self.passed_gates.append(run.target[:2])
                     # The car wash steers blind on this through the ribbons: keep it on-grid.
-                    self.variables['gate_yaw'] = self.square(run.target[2])
+                    gate_yaw = self.square(run.target[2])
+                    if expect is not None and self.lane_origin is not None \
+                            and abs(wrap_angle(gate_yaw - lane_yaw)) > math.radians(45):
+                        # Close-range leg pairs can snap a quadrant off (R0.91 run sent
+                        # the car wash 90 deg into a wall): the layout axis wins.
+                        self.get_logger().warn(
+                            f'gate axis {math.degrees(gate_yaw):.0f} deg disagrees with layout '
+                            f'{math.degrees(lane_yaw):.0f} deg; using layout')
+                        gate_yaw = self.square(lane_yaw)
+                    self.variables['gate_yaw'] = gate_yaw
                     self.reanchor_lane(spec.get('expect'), run.target)
                     run.done = True
                 return

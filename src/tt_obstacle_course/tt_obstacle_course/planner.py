@@ -18,22 +18,41 @@ def _wrap(a):
 
 
 class ObstacleMap:
-    """Accumulated lidar returns (odom frame) on a coarse cell set."""
+    """Lidar returns (odom frame) on a coarse cell set. `cells` are permanent (virtual
+    fences, stall marks); scan returns time-stamped via add_scan(t=...) expire after
+    `ttl` s unless seen again, so returns logged from a drifted pose don't build up
+    into ghost walls (buckets smeared shut under VO drift). Nearby obstacles are
+    re-seen every scan by the 360 deg lidar."""
 
-    def __init__(self, res=0.05, max_range=5.0):
+    def __init__(self, res=0.05, max_range=5.0, ttl=6.0):
         self.res = res
         self.max_range = max_range
+        self.ttl = ttl
         self.cells = set()
+        self.seen = {}
+        self.t = 0.0
 
-    def add_scan(self, scan, x, y, yaw):
+    def add_scan(self, scan, x, y, yaw, t=None):
         """scan: ScanView in the lidar frame; (x, y, yaw): lidar pose in odom."""
         xs, ys = scan.points()
         keep = np.hypot(xs, ys) < self.max_range
         c, s = math.cos(yaw), math.sin(yaw)
         ox = x + c * xs[keep] - s * ys[keep]
         oy = y + s * xs[keep] + c * ys[keep]
-        self.cells.update(zip(np.floor(ox / self.res).astype(int).tolist(),
-                              np.floor(oy / self.res).astype(int).tolist()))
+        new = zip(np.floor(ox / self.res).astype(int).tolist(),
+                  np.floor(oy / self.res).astype(int).tolist())
+        if t is None:
+            self.cells.update(new)
+            return
+        self.t = max(self.t, t)
+        self.seen.update((cell, t) for cell in new)
+        if len(self.seen) > 20000:
+            cut = self.t - self.ttl
+            self.seen = {k: v for k, v in self.seen.items() if v >= cut}
+
+    def occupied(self):
+        cut = self.t - self.ttl
+        return self.cells | {k for k, v in self.seen.items() if v >= cut}
 
     def inflated(self, x0, y0, x1, y1, radius):
         """Boolean grid (iy, ix) over the window, True within `radius` of a return."""
@@ -41,8 +60,9 @@ class ObstacleMap:
         i0, j0 = int(math.floor(x0 / r)), int(math.floor(y0 / r))
         nx, ny = int(math.ceil((x1 - x0) / r)) + 1, int(math.ceil((y1 - y0) / r)) + 1
         occ = np.zeros((ny, nx), dtype=bool)
-        if self.cells:
-            pts = np.array(list(self.cells))
+        cells = self.occupied()
+        if cells:
+            pts = np.array(list(cells))
             ix, iy = pts[:, 0] - i0, pts[:, 1] - j0
             m = (ix >= 0) & (ix < nx) & (iy >= 0) & (iy < ny)
             occ[iy[m], ix[m]] = True

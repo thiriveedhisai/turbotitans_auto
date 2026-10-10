@@ -315,6 +315,42 @@ def pursuit_curvature(target_angle, target_distance):
     return 2.0 * math.sin(target_angle) / max(target_distance, 0.3)
 
 
+def scan_shift(prev, cur, dyaw=0.0, max_shift=0.6, step=0.01, tol=0.03, max_range=6.0):
+    """Forward travel between two scans (robot frame, ranges/angles arrays each), by a
+    1-D match: rotate `prev` by the gyro's dyaw, slide it back by s and count points of
+    `cur` that land within tol. Returns the best s, or None when the match is not sharp
+    (featureless corridor, or nothing in range) - an honest 'don't know'."""
+    (a0, r0), (a1, r1) = prev, cur
+    m0 = np.isfinite(r0) & (r0 > 0.2) & (r0 < max_range)
+    m1 = np.isfinite(r1) & (r1 > 0.2) & (r1 < max_range)
+    if m0.sum() < 30 or m1.sum() < 30:
+        return None
+
+    def oblique(pts):
+        # Surfaces along the travel direction (lane walls) match at every shift; keep
+        # only points whose local surface (from scan neighbours) crosses it.
+        t = np.roll(pts, -1, axis=0) - np.roll(pts, 1, axis=0)
+        n = np.hypot(t[:, 0], t[:, 1])
+        return pts[(n < 0.3) & (np.abs(t[:, 0]) < 0.75 * np.maximum(n, 1e-6))]
+    p = oblique(np.stack([r0[m0] * np.cos(a0[m0] - dyaw), r0[m0] * np.sin(a0[m0] - dyaw)], axis=1))
+    q = np.stack([r1[m1] * np.cos(a1[m1]), r1[m1] * np.sin(a1[m1])], axis=1)
+    if len(p) < 15:
+        return None
+    p = p[::max(1, len(p) // 200)]
+    q = q[::max(1, len(q) // 300)]
+    shifts = np.arange(-max_shift, max_shift + step / 2, step)
+    # (shifts, p, q) squared distances; a point of prev counts if any point of cur is within tol.
+    dx = (p[None, :, 0] - shifts[:, None])[:, :, None] - q[None, None, :, 0]
+    dy = p[None, :, None, 1] - q[None, None, :, 1]
+    scores = ((dx * dx + dy * dy) <= tol * tol).any(axis=2).sum(axis=1)
+    best = int(np.argmax(scores))
+    # Sharp: clearly better than shifts 10+ cm away (a corridor scores flat along it).
+    far = np.abs(shifts - shifts[best]) >= 0.10
+    if not far.any() or scores[best] < 15 or scores[best] < 1.25 * scores[far].max():
+        return None
+    return float(shifts[best])
+
+
 def _openings(a, r, dist, min_width, depth_beyond):
     """Runs of beams reaching depth_beyond past the wall line (``dist`` is each
     beam's distance measured perpendicular to that wall); closed notches fail."""

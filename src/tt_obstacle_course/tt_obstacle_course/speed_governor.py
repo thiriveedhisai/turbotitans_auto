@@ -44,6 +44,8 @@ class SpeedGovernor(TTNode):
         self.rear_stop_d = float(p('rear_stop_distance', 0.33))
         self.ttc = float(p('ttc_brake_s', 0.6))
         self.crawl = float(p('crawl_speed', 0.15))
+        self.degraded_cap = float(p('degraded_speed_cap', 0.4))
+        self.degraded = False
         self.timeout = float(p('cmd_timeout', 0.3))
         rate = float(p('rate_hz', 20.0))
         self.steering = self.steering_model()
@@ -68,6 +70,7 @@ class SpeedGovernor(TTNode):
         self.create_subscription(Float32, '/mission/speed_cap', self.on_mission_cap, 10)
         self.create_subscription(Bool, '/terrain/lidar_ok', self.on_lidar_ok, 10)
         self.create_subscription(Bool, '/estop', self.on_estop, 10)
+        self.create_subscription(Bool, '/odom/degraded', self.on_degraded, 10)
         self.create_subscription(String, '/behavior/cmd', self.on_behavior, 10)
         self.create_subscription(LaserScan, p('scan_topic', '/scan'), self.on_scan,
                                  qos_profile_sensor_data)
@@ -81,6 +84,9 @@ class SpeedGovernor(TTNode):
 
     def on_mission_cap(self, msg):
         self.mission_cap = msg.data
+
+    def on_degraded(self, msg):
+        self.degraded = msg.data
 
     def on_lidar_ok(self, msg):
         self.lidar_ok = msg.data
@@ -103,6 +109,8 @@ class SpeedGovernor(TTNode):
 
     def limit(self, v, s, now):
         cap = min(self.max_speed * self.scale, self.mission_cap * self.scale, self.terrain_cap)
+        if self.degraded:
+            cap = min(cap, self.degraded_cap)
         v = min(v, cap) if v >= 0 else max(v, -min(self.max_rev, cap))
 
         kappa = abs(self.steering.steer_to_curvature(s))

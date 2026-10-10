@@ -3,18 +3,18 @@
 - /ackermann_cmd (AckermannDrive) -> /gz_cmd_vel Twist for AckermannSteering. Stands in for
   rc_car_controller + PCA9685, with the same normalised steering model as the stack:
   +/-max_steer_cmd = full lock = min radius.
-- /gz/odom_world (world-frame ground truth) -> /zed/zed_node/odom + TF odom -> zed_camera_link,
-  re-zeroed on the first message so odometry starts at 0 like the real ZED.
+- /gz/odom_world (world-frame ground truth) -> /sim/odom_truth (referee, blackout zones), re-zeroed
+  on the first message so it starts at 0 like the real ZED. With publish_odom (no simulated VO)
+  it is also published as /zed/zed_node/odom (perfect odometry).
 """
 
 import math
 
 import rclpy
 from ackermann_msgs.msg import AckermannDrive
-from geometry_msgs.msg import TransformStamped, Twist
+from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
-from tf2_ros import TransformBroadcaster
 
 
 def _yaw(q):
@@ -31,12 +31,13 @@ class AckermannToGz(Node):
         # Measured with steer_p_gain 10: full lock at R=1.07 gave 1.14 m, half lock 2.17 vs
         # 2.14 (tyre slip grows with lock); gain 1 + k*frac^2 matches turn_radius.
         self.yaw_gain = float(self.declare_parameter('yaw_gain_k', 0.065).value)
+        self.publish_odom = bool(self.declare_parameter('publish_odom', False).value)
         self.cmd = AckermannDrive()
         self.last = None
         self.origin = None
         self.pub = self.create_publisher(Twist, '/gz_cmd_vel', 10)
-        self.pub_odom = self.create_publisher(Odometry, '/zed/zed_node/odom', 10)
-        self.tf = TransformBroadcaster(self)
+        self.pub_truth = self.create_publisher(Odometry, '/sim/odom_truth', 10)
+        self.pub_odom = self.create_publisher(Odometry, '/zed/zed_node/odom', 10) if self.publish_odom else None
         self.create_subscription(AckermannDrive, '/ackermann_cmd', self.on_cmd, 10)
         self.create_subscription(Odometry, '/gz/odom_world', self.on_odom, 10)
         self.create_timer(0.05, self.tick)
@@ -63,15 +64,9 @@ class AckermannToGz(Node):
         o.y = hw * q.y + hz * q.x
         o.z = hw * q.z + hz * q.w
         out.twist = msg.twist
-        self.pub_odom.publish(out)
-        t = TransformStamped()
-        t.header = out.header
-        t.child_frame_id = out.child_frame_id
-        t.transform.translation.x = out.pose.pose.position.x
-        t.transform.translation.y = out.pose.pose.position.y
-        t.transform.translation.z = out.pose.pose.position.z
-        t.transform.rotation = o
-        self.tf.sendTransform(t)
+        self.pub_truth.publish(out)
+        if self.publish_odom:
+            self.pub_odom.publish(out)
 
     def on_cmd(self, msg):
         self.cmd = msg

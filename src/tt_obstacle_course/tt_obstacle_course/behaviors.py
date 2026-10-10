@@ -90,21 +90,22 @@ class Behavior:
     def steer_for(self, kappa):
         return self.cfg.steering.curvature_to_steer(kappa)
 
-    def clear_kappa(self, ctx, kappa, need=0.45, any_side=False):
+    def clear_kappa(self, ctx, kappa, need=0.45, any_side=False, open_m=None):
         """The controller may ask for an arc that clips a wall or hoop leg; the governor
         then stops us and backing off just repeats it. Use the curvature nearest the
-        request whose swept band is clear for `need` m: easing off on the same side,
-        or (any_side) also bending the other way. None clear: keep the request."""
+        request whose swept band is clear for `need` m (alternatives: `open_m`): easing
+        off on the same side, or (any_side) also bending the other way. None clear:
+        keep the request."""
         if not ctx.lidar_ok or ctx.scan is None:
             return kappa
         k_max = self.cfg.steering.max_curvature
         kappa = max(-k_max, min(k_max, kappa))
         band = self.cfg.half_width + 0.08
 
-        def clear(k):
+        def clear(k, d):
             return ctx.scan.corridor_clearance(band, True, min_x=self.cfg.front_overhang,
-                                               curvature=k, axle_back=self.cfg.axle_back) >= need
-        if clear(kappa):
+                                               curvature=k, axle_back=self.cfg.axle_back) >= d
+        if clear(kappa, need):
             return kappa
         if any_side:
             options = sorted((f * k_max for f in (-1, -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1)),
@@ -112,7 +113,7 @@ class Behavior:
         else:
             options = [kappa * f for f in (0.75, 0.5, 0.25, 0.0)]
         for k in options:
-            if clear(k):
+            if clear(k, open_m or need):
                 return k
         return kappa
 
@@ -248,7 +249,8 @@ class WallCenter(Behavior):
         self.hold_yaw = ctx.odom.yaw
         dx, dy = tgt[0] + self.cfg.axle_back, tgt[1]
         kappa = 2.0 * dy / (dx * dx + dy * dy)
-        return Command(speed, self.steer_for(self.clear_kappa(ctx, kappa)), status)
+        # In a bend every gentler arc runs into the outer wall: ease off only into open space.
+        return Command(speed, self.steer_for(self.clear_kappa(ctx, kappa, open_m=0.9)), status)
 
 
 class GapFollow(Behavior):
@@ -487,22 +489,28 @@ class PlanDrive(Behavior):
         self.t_plan = -1e9
         self.t_check = 0.0
         self.stall_since = None
+        self.candidates = []
         if 'goal' not in self.p and self.p.get('goal_from_gap') and ctx.scan is not None:
-            # Recovery: aim into the free space ahead (lane continues there), heading
-            # along the line of sight (the arc-tangent 2*ang is too sharp at large R).
             gap = ctx.scan.follow_gap(2.0, 0.2, 0.6, min_width=2 * self.cfg.half_width + 0.1)
             if gap is not None:
-                ang, dist = gap[0], min(gap[1], float(self.p['goal_from_gap']))
+                # Recovery: fan of candidate poses between straight ahead and the free gap;
+                # in a lane barely wider than the truck one ray's goal is often in the wall.
+                ang, reach = gap[0], min(gap[1], float(self.p['goal_from_gap']))
                 o = ctx.odom
-                lx = dist * math.cos(ang) - self.cfg.camera_ahead
-                gx, gy = o.to_odom(lx, dist * math.sin(ang))
-                self.p['goal'] = [gx, gy, wrap_angle(o.yaw + ang)]
+                self.candidates = []
+                for f in (1.0, 0.75, 0.5, 0.25):
+                    for d in (reach, 0.75 * reach, 1.0):
+                        a = f * ang
+                        lx = d * math.cos(a) - self.cfg.camera_ahead
+                        gx, gy = o.to_odom(lx, d * math.sin(a))
+                        self.candidates.append([gx, gy, wrap_angle(o.yaw + a)])
+                self.p['goal'] = self.candidates.pop(0)
+                self.p.setdefault('radius_factor', 1.0)
         if 'goal' not in self.p:
             self.goal = None
             return
         gx, gy, gyaw = (float(v) for v in self.p['goal'])
-        self.goal_cam = (gx, gy, gyaw)
-        self.goal = (gx - self.a * math.cos(gyaw), gy - self.a * math.sin(gyaw), gyaw)
+        self.set_goal(gx, gy, gyaw)
         # Virtual walls (e.g. drop-off edges the lidar can't see): [[x1, y1, x2, y2], ...].
         for x1, y1, x2, y2 in self.p.get('fence', []):
             n = max(2, int(math.hypot(x2 - x1, y2 - y1) / 0.03))
@@ -510,6 +518,10 @@ class PlanDrive(Behavior):
                 t = k / n
                 self.map.cells.add((int((x1 + t * (x2 - x1)) // self.map.res),
                                     int((y1 + t * (y2 - y1)) // self.map.res)))
+
+    def set_goal(self, gx, gy, gyaw):
+        self.goal_cam = (gx, gy, gyaw)
+        self.goal = (gx - self.a * math.cos(gyaw), gy - self.a * math.sin(gyaw), gyaw)
 
     def rear(self, ctx):
         o = ctx.odom
@@ -537,6 +549,11 @@ class PlanDrive(Behavior):
             grid = self.map.inflated(min(xs) - m, min(ys) - m, max(xs) + m, max(ys) + m, tight.radius)
             self.path = plan(rear, self.goal, grid, tight, radius, allow_reverse=reverse)
         self.i = 0
+        if self.path is None and self.candidates:
+            # Unreachable recovery goal: try the next candidate straight away.
+            self.set_goal(*self.candidates.pop(0))
+            self.t_plan = -1e9
+            return
         if self.path is None:
             self.fails += 1
 
@@ -643,7 +660,8 @@ class PlanDrive(Behavior):
 
 
 class BackOff(Behavior):
-    """Reverse for a distance (stuck recovery), optionally with a steering angle."""
+    """Reverse for a distance (stuck recovery), optionally with a steering angle. If the
+    rear is blocked before it has moved, it tries the opposite steer once."""
     name = 'backoff'
 
     def step(self, ctx, dt):
@@ -651,6 +669,9 @@ class BackOff(Behavior):
             return Command(0.0, 0.0, DONE)
         if (ctx.scan is not None and ctx.lidar_ok
                 and self.cfg.rear(ctx.scan) < self.cfg.rear_overhang + 0.12):
+            if self.travelled(ctx) < 0.05 and not self.p.get('flipped') and self.p.get('steer'):
+                self.p['steer'], self.p['flipped'] = -float(self.p['steer']), True
+                return Command(0.0, self.p['steer'], RUNNING, 'rear blocked: other lock')
             return Command(0.0, 0.0, DONE, 'rear blocked')
         return Command(-abs(float(self.p.get('speed', 0.3))), float(self.p.get('steer', 0.0)),
                        RUNNING)
@@ -667,13 +688,18 @@ def make_behavior(name, params, cfg):
 
 
 class StuckMonitor:
-    """Detects 'commanding motion but not moving' and runs a BackOff."""
+    """Detects 'commanding motion but not moving' and runs a BackOff, backing off further
+    on each retry; afterwards the next stretch is driven slowly."""
 
-    def __init__(self, min_speed=0.05, time_s=1.5, backoff_distance=0.3, max_retries=3):
+    def __init__(self, min_speed=0.05, time_s=1.5, backoff_distance=0.3, max_retries=3,
+                 slow_speed=0.25, slow_distance=0.8):
         self.min_speed = min_speed
         self.time_s = time_s
         self.backoff_distance = backoff_distance
         self.max_retries = max_retries
+        self.slow_speed = slow_speed
+        self.slow_distance = slow_distance
+        self.slow_until = -1.0
         self.reset()
 
     def reset(self):
@@ -709,9 +735,16 @@ class StuckMonitor:
             return False
         # Reverse with opposite lock: the nose swings toward where it was steering.
         steer = -cfg.steering.full_lock(cmd.steer) if abs(cmd.steer) > 0.05 else 0.0
-        self.backoff = BackOff({'distance': self.backoff_distance, 'steer': steer}, cfg)
+        dist = self.backoff_distance * (1.0 + 0.5 * (self.retries - 1))
+        self.backoff = BackOff({'distance': dist, 'steer': steer}, cfg)
         self.backoff.start(ctx)
         return True
+
+    def limit(self, ctx, cmd):
+        """Retry slowly: cap forward speed for a stretch after a backoff."""
+        if cmd.speed > self.slow_speed and ctx.odom.distance < self.slow_until:
+            cmd.speed = self.slow_speed
+        return cmd
 
     def exhausted(self):
         return self.retries > self.max_retries
@@ -720,5 +753,6 @@ class StuckMonitor:
         cmd = self.backoff.step(ctx, dt)
         if cmd.status != RUNNING:
             self.backoff = None
+            self.slow_until = ctx.odom.distance + self.slow_distance
             return Command(0.0, 0.0, RUNNING, 'recovered')
         return Command(cmd.speed, cmd.steer, RUNNING, 'stuck backoff')

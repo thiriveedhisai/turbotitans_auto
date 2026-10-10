@@ -302,7 +302,9 @@ class Course:
         self.marker_at('wide', px, py + 0.66, W, yaw=math.pi)
         west, south, east = -6.3, 0.85, -2.96
         self.patch(west, px, south, 9.3, 'wide', base=W)
-        self.wall([(west, south), (west, 9.27)], base=W)
+        # Ends where it meets the narrow curve's inner wall (x=-6.3 at y~8.96); running on
+        # to 9.27 put a bale stub across the curve lane that wedged every 3-D run.
+        self.wall([(west, south), (west, 8.9)], base=W)
         self.wall([(west, south), (east, south)], base=W)
         # Changeable boundaries: zig-zag decoy under the pothole lane, west-wall stubs,
         # an inverted-V decoy on the south wall.

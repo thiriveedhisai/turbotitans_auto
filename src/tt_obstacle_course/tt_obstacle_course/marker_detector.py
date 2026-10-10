@@ -57,6 +57,7 @@ class MarkerDetector(TTNode):
         self.K = None
         self.D = None
         self.bridge = CvBridge()
+        self.clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
         self.hits = {}
         self.last_sent = {}
 
@@ -78,6 +79,9 @@ class MarkerDetector(TTNode):
             return
         gray = self.bridge.imgmsg_to_cv2(msg, desired_encoding='mono8')
         corners, ids, _ = self.detect(gray)
+        if ids is None:
+            # Dim tunnel / backlit tag: retry on a locally contrast-equalised image.
+            corners, ids, _ = self.detect(self.clahe.apply(gray))
         seen = set()
         out = []
         if ids is not None:
@@ -87,8 +91,8 @@ class MarkerDetector(TTNode):
                 pts = c.reshape(4, 2).astype(np.float32)
                 if zone is None or np.linalg.norm(pts[0] - pts[1]) < self.min_side:
                     continue
-                ok, _, tvec = cv2.solvePnP(self.obj, pts, self.K, self.D,
-                                           flags=cv2.SOLVEPNP_IPPE_SQUARE)
+                ok, rvec, tvec = cv2.solvePnP(self.obj, pts, self.K, self.D,
+                                              flags=cv2.SOLVEPNP_IPPE_SQUARE)
                 if not ok:
                     continue
                 t = tvec.flatten()
@@ -97,8 +101,11 @@ class MarkerDetector(TTNode):
                     continue
                 # Optical frame: x right, z forward -> bearing positive to the left.
                 bearing = math.degrees(math.atan2(-t[0], t[2]))
+                # Tag face normal in the vehicle frame (tags hang flat on course walls).
+                n = cv2.Rodrigues(rvec)[0][:, 2]
+                normal = math.degrees(math.atan2(-n[0], n[2]))
                 out.append({'id': tag, 'zone': zone, 'distance': round(dist, 2),
-                            'bearing_deg': round(bearing, 1)})
+                            'bearing_deg': round(bearing, 1), 'normal_deg': round(normal, 1)})
                 if dist <= self.trigger_range:
                     seen.add(zone)
         for zone in list(self.hits):

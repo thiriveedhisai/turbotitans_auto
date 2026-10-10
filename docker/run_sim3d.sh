@@ -29,7 +29,8 @@ docker run --rm --gpus all --group-add "$(getent group render | cut -d: -f3)" \
         --paths src/rc_car_controller src/tt_obstacle_course src/tt_course_sim \
         > /tmp/build.log 2>&1 || { cat /tmp/build.log; exit 1; }
     source /tmp/install/setup.bash
-    timeout 900 ros2 launch tt_course_sim sim3d.launch.py output_dir:=/out/$name $*
+    # Wall-clock guard only; the referee ends the run on sim time (parallel runs go ~0.3-0.6x).
+    timeout 2400 ros2 launch tt_course_sim sim3d.launch.py output_dir:=/out/$name $*
   " > "$out/$name.log" 2>&1 || true
 
 grep -E '=== 3D RUN' "$out/$name.log" || echo "no result line; see $out/$name.log"

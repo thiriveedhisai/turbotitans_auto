@@ -30,7 +30,8 @@ def generate_launch_description():
         DeclareLaunchArgument('mission', default_value=PathJoinSubstitution([pkg, 'config', 'mission.yaml'])),
         DeclareLaunchArgument('nav2_params',
                               default_value=PathJoinSubstitution([pkg, 'config', 'nav2_params.yaml'])),
-        DeclareLaunchArgument('use_nav2', default_value='true'),
+        # No mission step sends Nav2 goals (own Hybrid-A* planner); kept as an option.
+        DeclareLaunchArgument('use_nav2', default_value='false'),
         DeclareLaunchArgument('start_zone', default_value='',
                               description='Begin the mission at this zone (practice)'),
         DeclareLaunchArgument('sensors', default_value='true', description='Start ZED and lidar drivers'),
@@ -52,7 +53,9 @@ def generate_launch_description():
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(PathJoinSubstitution(
                 [FindPackageShare('zed_wrapper'), 'launch', 'zed_camera.launch.py'])),
-            launch_arguments={'camera_model': 'zed2i', 'publish_map_tf': 'false'}.items()),
+            # odom_guard publishes odom -> zed_camera_link from its fused pose.
+            launch_arguments={'camera_model': 'zed2i', 'publish_map_tf': 'false',
+                              'publish_tf': 'false'}.items()),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(PathJoinSubstitution(
                 [FindPackageShare('sllidar_ros2'), 'launch', 'sllidar_a1_launch.py'])),
@@ -88,6 +91,7 @@ def _stack_and_nav2(context):
 
     cameras = IfCondition(LaunchConfiguration('camera_nodes'))
     stack = [
+        tt('odom_guard'),
         tt('terrain_monitor'),
         tt('start_detector', condition=cameras),
         tt('marker_detector', condition=cameras),

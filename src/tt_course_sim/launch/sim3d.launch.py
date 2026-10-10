@@ -61,8 +61,13 @@ def _setup(context):
                     ('/gz/zed/image', '/zed/zed_node/rgb/color/rect/image'),
                     ('/gz/zed/camera_info', '/zed/zed_node/rgb/color/rect/camera_info'),
                     ('/gz/zed/depth_image', '/zed/zed_node/depth/depth_registered')])
+    vo = lc('vo') == 'true'
     drive = Node(package='tt_course_sim', executable='ackermann_to_gz', name='ackermann_to_gz',
-                 output='screen', parameters=[sim_time, {'turn_radius': radius}])
+                 output='screen', parameters=[sim_time, {'turn_radius': radius, 'publish_odom': not vo}])
+    # ZED odometry from the simulated camera + IMU (drifts, loses tracking like the real one).
+    zed_vo = Node(package='tt_course_sim', executable='zed_vo_sim', name='zed_vo_sim', output='screen',
+                  parameters=[sim_time, {'seed': seed, 'rails': rails, 'spawn': list(spawn),
+                                         'blackout_zones': lc('vo_blackout')}])
     referee = Node(package='tt_course_sim', executable='gz_referee', name='gz_referee',
                    output='screen',
                    parameters=[sim_time, {'seed': seed, 'rails': rails, 'start_zone': start_zone,
@@ -76,7 +81,7 @@ def _setup(context):
                           'tuning': tuning}.items())
     stop = [RegisterEventHandler(OnProcessExit(target_action=a, on_exit=[EmitEvent(event=Shutdown())]))
             for a in (referee, gz)]
-    return [gz, bridge, drive, referee, stack, *stop]
+    return [gz, bridge, drive, *([zed_vo] if vo else []), referee, stack, *stop]
 
 
 def generate_launch_description():
@@ -87,7 +92,11 @@ def generate_launch_description():
         DeclareLaunchArgument('friction', default_value='0.8',
                               description='Course surface friction (painted plywood ~0.8, dusty ~0.6)'),
         DeclareLaunchArgument('start_zone', default_value=''),
-        DeclareLaunchArgument('use_nav2', default_value='true'),
+        DeclareLaunchArgument('vo', default_value='true',
+                              description='ZED odometry from simulated camera VO (false = ground truth)'),
+        DeclareLaunchArgument('vo_blackout', default_value='tunnel,car_wash',
+                              description='Zones where visual tracking is forced lost (comma list)'),
+        DeclareLaunchArgument('use_nav2', default_value='false'),
         DeclareLaunchArgument('timeout', default_value='600.0'),
         DeclareLaunchArgument('output_dir', default_value='/tmp/tt_gz_run'),
         DeclareLaunchArgument('tuning', default_value=''),

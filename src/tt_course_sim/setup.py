@@ -24,5 +24,6 @@ setup(
         'course_sim = tt_course_sim.course_sim:main',
         'ackermann_to_gz = tt_course_sim.ackermann_to_gz:main',
         'gz_referee = tt_course_sim.gz_referee:main',
+        'zed_vo_sim = tt_course_sim.zed_vo_sim:main',
     ]},
 )

@@ -19,6 +19,7 @@ from rclpy.node import Node
 from ackermann_msgs.msg import AckermannDrive
 from nav_msgs.msg import Odometry
 from rcl_interfaces.msg import ParameterDescriptor
+from std_msgs.msg import Bool
 
 from rc_car_controller.pca9685 import PCA9685
 
@@ -178,6 +179,10 @@ class RcCarController(Node):
         if self._fb_enabled:
             self._odom_sub = self.create_subscription(
                 Odometry, gp('speed_feedback_topic').value, self._on_odom, 10)
+            # ZED dropout: its speed is meaningless, run open loop instead of winding up.
+            self._odom_degraded = False
+            self._degraded_sub = self.create_subscription(
+                Bool, '/odom/degraded', lambda m: setattr(self, '_odom_degraded', m.data), 10)
         self._watchdog = self.create_timer(0.1, self._check_timeout)
         self.get_logger().info(
             f"Listening for AckermannDrive on '{gp('input_topic').value}'.")
@@ -252,7 +257,8 @@ class RcCarController(Node):
         return int(round(_clamp(us, self._motor_min, self._motor_max)))
 
     def _speed_correction(self, target, now):
-        fresh = self._meas_time is not None and now - self._meas_time < 0.3
+        fresh = (self._meas_time is not None and now - self._meas_time < 0.3
+                 and not getattr(self, '_odom_degraded', False))
         if not self._fb_enabled or not fresh or abs(target) < 0.05:
             self._integral = 0.0
             self._last_pi_time = None

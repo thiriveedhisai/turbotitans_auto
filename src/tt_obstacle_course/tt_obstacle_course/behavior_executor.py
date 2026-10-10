@@ -134,6 +134,8 @@ class BehaviorExecutor(TTNode):
             cmd = self.stuck.step(ctx, dt)
         else:
             cmd = self.behavior.step(ctx, dt)
+            if not getattr(self.behavior, 'self_recovers', False):
+                cmd = self.stuck.limit(ctx, cmd)
             if (cmd.status == RUNNING and not getattr(self.behavior, 'self_recovers', False)
                     and self.stuck.check(ctx, cmd, self.cfg)):
                 self.get_logger().warn(f'stuck in {self.name}, backing off '

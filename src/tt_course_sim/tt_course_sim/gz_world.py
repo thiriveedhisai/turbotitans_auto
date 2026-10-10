@@ -5,9 +5,10 @@ pothole bumps, buckets, hoops, car-wash ribbons (visual only: seen by lidar and
 camera, no collision), AprilTag 36h11 zone markers (one tag id per zone), and the start light
 (green disc behind a red cover the referee removes at race start).
 
-Truck: Ackermann steering (rear drive), gpu_lidar, RGB-D camera, IMU, ground
-truth odometry published as odom -> zed_camera_link. The model origin IS the
-camera, so the odometry point matches the real ZED.
+Truck: Ackermann steering (rear drive), gpu_lidar, RGB-D camera, noisy IMU, headlamp,
+and a ground-truth pose publisher (referee only; the stack gets odometry from zed_vo_sim).
+The model origin IS the camera, so the odometry point matches the real ZED. Bales, floor
+and ground are textured so camera visual odometry has real-world-like features.
 """
 
 import math
@@ -25,6 +26,7 @@ TRACK = 0.18
 # Course-surface friction; contacts use min(tyre, surface). RC rubber on painted plywood
 # is ~0.7-0.9, dusty ~0.6. Set per world by generate(friction=...).
 SURFACE_MU = 0.8
+HOOP_LEG = 0.60             # hoop leg height; a round arch spans the legs above it
 
 
 def _pose(x, y, z, roll=0.0, pitch=0.0, yaw=0.0):
@@ -51,10 +53,48 @@ def _cyl_link(name, pose, r, h, rgba, collide=True):
             f'</visual></link>')
 
 
-def _course_links(c, tag_files, rng):
+def make_textures(out_dir, seed=0):
+    """Procedural textures so the camera sees real-world-like texture (straw, painted
+    plywood, concrete): visual odometry needs features, flat colours starve it."""
+    import cv2
+    rng = np.random.default_rng(seed + 7)
+    files = {}
+
+    def save(name, img):
+        path = os.path.join(out_dir, f'tex_{name}.png')
+        cv2.imwrite(path, img)
+        files[name] = path
+
+    n = 512
+    straw = np.full((n, n, 3), (70, 160, 200), np.uint8)
+    for _ in range(2500):
+        x, y = rng.integers(0, n, 2)
+        a, ln = rng.uniform(-0.5, 0.5), rng.integers(6, 30)
+        shade = int(rng.integers(-70, 50))
+        col = tuple(int(np.clip(c + shade, 0, 255)) for c in (70, 160, 200))
+        cv2.line(straw, (int(x), int(y)), (int(x + ln * np.cos(a)), int(y + ln * np.sin(a))), col, 1)
+    save('straw', cv2.GaussianBlur(straw, (3, 3), 0))
+
+    def speckle(base, spread, blotch):
+        img = base + rng.normal(0, spread, (n, n, 1))
+        low = cv2.resize(rng.normal(0, blotch, (16, 16)).astype(np.float32), (n, n))
+        return np.clip(img + low[..., None], 0, 255).astype(np.uint8).repeat(3, axis=2)
+    save('plywood', speckle(np.full((n, n, 1), 150.0), 18, 25))
+    save('concrete', speckle(np.full((n, n, 1), 95.0), 14, 20))
+    return files
+
+
+def _tex(path):
+    return f'<pbr><metal><albedo_map>{path}</albedo_map></metal></pbr>'
+
+
+def _course_links(c, tag_files, rng, tex=None):
+    tex = tex or {}
     links = []
     n = 0
     bale, rail = '0.85 0.7 0.3 1', '0.4 0.4 0.9 1'
+    straw = _tex(tex['straw']) if 'straw' in tex else ''
+    ply = _tex(tex['plywood']) if 'plywood' in tex else ''
     for x1, y1, b1, t1, x2, y2, b2, t2, kind in c.segs3d:
         length = math.hypot(x2 - x1, y2 - y1)
         if length < 1e-3:
@@ -65,11 +105,14 @@ def _course_links(c, tag_files, rng):
         cz = (b1 + b2) / 2 + h / 2
         links.append(_box_link(f'w{n}', _pose((x1 + x2) / 2, (y1 + y2) / 2, cz, 0, pitch,
                                               math.atan2(y2 - y1, x2 - x1)),
-                               (length + thick * 0.5, thick, h), bale if kind == 'bale' else rail))
+                               (length + thick * 0.5, thick, h),
+                               ('1 1 1 1' if straw else bale) if kind == 'bale' else rail,
+                               extra_visual=straw if kind == 'bale' else ''))
         n += 1
     for cx, cy, cz, length, width, thick, yaw, pitch, roll, zone in c.slabs3d:
         links.append(_box_link(f's{n}', _pose(cx, cy, cz, roll, pitch, yaw),
-                               (length, width, thick), '0.6 0.6 0.6 1'))
+                               (length, width, thick), '1 1 1 1' if ply else '0.6 0.6 0.6 1',
+                               extra_visual=ply))
         n += 1
     # Gravel / potholes: small bumps (holes can't be cut into a box).
     for cx, cy, yaw, length, width, z, vib in c.rough3d:
@@ -84,16 +127,24 @@ def _course_links(c, tag_files, rng):
         if kind == 'bucket':
             links.append(_cyl_link(f'b{n}', _pose(x, y, 0.185), 0.15, 0.37, '1 0.5 0 1'))
         elif kind == 'hoop':
-            links.append(_cyl_link(f'h{n}', _pose(x, y, 0.3), 0.025, 0.6, '0.8 0.1 0.1 1'))
+            links.append(_cyl_link(f'h{n}', _pose(x, y, HOOP_LEG / 2), 0.025, HOOP_LEG, '0.8 0.1 0.1 1'))
         elif kind == 'post':
             links.append(_cyl_link(f'p{n}', _pose(x, y, 0.18), r, 0.36, '0.5 0.3 0.1 1'))
         n += 1
-    # Hoop top bars (posts are listed in pairs).
+    # Hoop tops: a round arch from leg to leg (legs are listed in pairs).
     posts = [(x, y) for x, y, r, k in c.discs if k == 'hoop']
     for (x1, y1), (x2, y2) in zip(posts[0::2], posts[1::2]):
-        links.append(_box_link(f'hb{n}', _pose((x1 + x2) / 2, (y1 + y2) / 2, 0.88, 0, 0,
-                                               math.atan2(y2 - y1, x2 - x1)),
-                               (math.hypot(x2 - x1, y2 - y1) + 0.05, 0.04, 0.04), '0.8 0.1 0.1 1'))
+        half = math.hypot(x2 - x1, y2 - y1) / 2
+        ux, uy = (x2 - x1) / (2 * half), (y2 - y1) / (2 * half)
+        yaw = math.atan2(uy, ux)
+        for k in range(12):
+            a0, a1 = math.pi * k / 12, math.pi * (k + 1) / 12
+            am = (a0 + a1) / 2
+            along, up = -half * math.cos(am), half * math.sin(am)
+            seg = 2 * half * math.sin((a1 - a0) / 2) + 0.01
+            links.append(_box_link(f'ha{n}_{k}', _pose((x1 + x2) / 2 + ux * along, (y1 + y2) / 2 + uy * along,
+                                                       HOOP_LEG + up, 0, am - math.pi / 2, yaw),
+                                   (seg, 0.04, 0.04), '0.8 0.1 0.1 1', collide=False))
         n += 1
     # Car-wash ribbons: visual only, hanging to 0.1 m.
     for cx, cy, yaw, hl, hw in c.noise_boxes:
@@ -151,6 +202,12 @@ def _steer(name, x, y, z, limit):
             f'<upper>{limit:.4f}</upper><effort>20</effort></limit></axis></joint>')
 
 
+def _imu_noise(std, bias):
+    axis = (f'<noise type="gaussian"><mean>0</mean><stddev>{std}</stddev>'
+            f'<bias_mean>0</bias_mean><bias_stddev>{bias}</bias_stddev></noise>')
+    return ''.join(f'<{a}>{axis}</{a}>' for a in 'xyz')
+
+
 def truck_sdf(pose, radius):
     # Headroom: tyre slip makes the achieved radius ~10% wider than the geometric one,
     # ackermann_to_gz compensates with yaw_gain and needs the extra lock.
@@ -178,7 +235,15 @@ def truck_sdf(pose, radius):
         '<format>R8G8B8</format></image><clip><near>0.1</near><far>15</far></clip>'
         '<depth_camera><clip><near>0.3</near><far>10</far></clip></depth_camera></camera></sensor>'
         '<sensor name="imu" type="imu"><topic>/gz/imu</topic><update_rate>100</update_rate>'
-        '<always_on>1</always_on><gz_frame_id>zed_imu_link</gz_frame_id></sensor>'
+        '<always_on>1</always_on><gz_frame_id>zed_imu_link</gz_frame_id>'
+        # ZED 2i class MEMS IMU: white noise + slowly varying bias.
+        f'<imu><angular_velocity>{_imu_noise(0.003, 0.0015)}</angular_velocity>'
+        f'<linear_acceleration>{_imu_noise(0.03, 0.02)}</linear_acceleration></imu></sensor>'
+        '<light name="headlamp" type="spot"><pose>0.03 0 -0.02 0 0 0</pose><cast_shadows>false</cast_shadows>'
+        '<diffuse>1 1 0.95 1</diffuse><specular>0.2 0.2 0.2 1</specular><direction>1 0 -0.15</direction>'
+        '<attenuation><range>6</range><constant>0.3</constant><linear>0.1</linear><quadratic>0.02</quadratic>'
+        '</attenuation><spot><inner_angle>0.7</inner_angle><outer_angle>1.1</outer_angle><falloff>1</falloff>'
+        '</spot></light>'
         # Third-person view for the run visualisation only (not used by the stack).
         '<sensor name="chase" type="camera"><pose>-1.4 0 0.9 0 0.5 0</pose><topic>/gz/chase</topic>'
         '<update_rate>2</update_rate><always_on>1</always_on><camera><horizontal_fov>1.3</horizontal_fov>'
@@ -235,7 +300,13 @@ def generate(out_dir, seed=0, rails=True, radius=1.52, start_zone='', tag_map=No
     c = Course(rails=rails, seed=seed)
     rng = np.random.default_rng(seed + 100)
     tag_files = make_tags(out_dir, tag_map or {}) if tag_map else {}
+    tex = make_textures(out_dir, seed)
     sx, sy, syaw = c.waypoint(start_zone) if start_zone else c.start_pose
+    # Ground in 2 m textured tiles (one stretched texture would be featureless).
+    tiles = ''.join(
+        _box_link(f'gt{i}_{j}', _pose(x0, y0, -0.0005), (2.0, 2.0, 0.001), '1 1 1 1', collide=False,
+                  extra_visual=_tex(tex['concrete']))
+        for i, x0 in enumerate(np.arange(-14, 16, 2.0)) for j, y0 in enumerate(np.arange(-6, 16, 2.0)))
     sz = c.ground(sx, sy, 0.0)[0]
     world = f'''<?xml version="1.0"?>
 <sdf version="1.9">
@@ -246,14 +317,16 @@ def generate(out_dir, seed=0, rails=True, radius=1.52, start_zone='', tag_map=No
   <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
   <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors"><render_engine>ogre2</render_engine></plugin>
   <plugin filename="gz-sim-imu-system" name="gz::sim::systems::Imu"/>
-  <scene><ambient>0.7 0.7 0.7 1</ambient><background>0.8 0.85 0.9 1</background></scene>
-  <light type="directional" name="sun"><cast_shadows>false</cast_shadows><pose>0 0 10 0 0 0</pose>
+  <scene><ambient>0.6 0.6 0.6 1</ambient><background>0.8 0.85 0.9 1</background>
+    <shadows>true</shadows></scene>
+  <light type="directional" name="sun"><cast_shadows>true</cast_shadows><pose>0 0 10 0 0 0</pose>
     <diffuse>0.9 0.9 0.9 1</diffuse><direction>-0.3 0.2 -0.9</direction></light>
   <model name="ground"><static>true</static>
     {_box_link("g", _pose(0, 0, -0.05), (80, 80, 0.1), "0.3 0.32 0.3 1")}
+    {tiles}
   </model>
   <model name="course_static"><static>true</static>
-    {_course_links(c, tag_files, rng)}
+    {_course_links(c, tag_files, rng, tex)}
   </model>
   {_start_light(c) if not start_zone else ''}
   {truck_sdf((sx, sy, sz, syaw), radius)}

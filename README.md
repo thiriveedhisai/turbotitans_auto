@@ -241,19 +241,27 @@ Preview the course: `python3 -m tt_course_sim.course course.png` (in the contain
 
 `docker/run_sim3d.sh` runs the same stack in Gazebo Harmonic (DART physics, gravity,
 surface friction) on the drawing geometry: real ramps, helix, 8.5 deg bank, gravel,
-hoop legs, ZED camera with one AprilTag (tag36h11, ids 0-11) per zone, and a chase
-camera. Up to four runs can go in parallel.
+textured bales/floor, hoops (legs + round top), noisy IMU, headlamp, ZED RGB-D camera
+with one AprilTag (tag36h11, ids 0-11) per zone, and a chase camera. Run at most two in
+parallel (each is ~0.5x real time).
+
+Odometry is not ground truth: `zed_vo_sim` runs visual odometry on the simulated ZED
+images + depth (ORB + PnP, gyro heading), so it drifts and loses tracking like the
+real ZED; tracking is also forced off in the tunnel and car wash (`vo_blackout`). The
+stack's `odom_guard` dead-reckons through dropouts (gyro + commanded speed, lidar
+confirms motion) and corrects heading from straight lane walls and AprilTags. The
+referee scores against ground truth and logs the odometry error.
 
 ```bash
 docker/run_sim3d.sh r122 turn_radius:=1.22                  # 4 ft turning radius
 docker/run_sim3d.sh dusty seed:=7 turn_radius:=1.22 friction:=0.6
+docker/run_sim3d.sh perfect vo:=false vo_blackout:=''       # ground-truth odometry
 docker/run_sim3d.sh hoops start_zone:=hoops seed:=3
 # results: /tmp/simout/<name>/{result.json, trajectory.csv, run.png, frames/*.jpg}
 ```
 
-Verified to finish at turning radii 3-5 ft (0.91-1.52 m), random layouts and
-friction 0.6-0.8. 6 ft (1.83 m) is not supported: the 28" narrow curve's centreline
-radius is 6 ft and the bank plane is too shallow for a 6 ft U-turn.
+Target turning radius 3-5 ft (0.91-1.52 m). 6 ft (1.83 m) is out of scope: the 28"
+narrow curve's centreline radius is 6 ft and the bank plane is too shallow for it.
 
 ---
 

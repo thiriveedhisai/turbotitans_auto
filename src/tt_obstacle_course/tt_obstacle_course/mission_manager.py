@@ -165,9 +165,11 @@ class MissionManager(TTNode):
         self.markers = {}
         self.gaps = {}
         self.gate = None
+        self.gate_confirmed = False
         self.passed_gates = []
         self.last_gap = None
         self.lane_origin = None
+        self.last_hoop_along = 0.0
         # Bucket-field exit -> start of the hoop lane (36" connector, ~0.83 m).
         self.connector = float(self.mission.get('hoop_lane', {}).get('connector', 0.83))
         self.finished = False
@@ -252,6 +254,7 @@ class MissionManager(TTNode):
 
     def on_gate(self, msg):
         self.gate = (self.pose_of(msg), self.now_s())
+        self.gate_confirmed = msg.pose.position.z > 0.5
 
     # ------------------------------------------------------------ commands
     def compute_variables(self):
@@ -340,6 +343,19 @@ class MissionManager(TTNode):
     def set_lane_origin(self, x, y, yaw):
         """Start of the 72" hoop lane: hoop lines are measured from here."""
         self.lane_origin = (x, y, yaw)
+        self.last_hoop_along = 0.0
+
+    def reanchor_lane(self, expect, gate):
+        """Shift the lane origin along the lane so the hoop just passed sits on its expected
+        line: later hoops are then measured from a fresh sighting, not odometry since the exit."""
+        if not expect or 'along' not in expect or self.lane_origin is None:
+            return
+        ox, oy, oyaw = self.lane_origin
+        c, s = math.cos(oyaw), math.sin(oyaw)
+        shift = c * (gate[0] - ox) + s * (gate[1] - oy) - float(expect['along'])
+        self.lane_origin = (ox + c * shift, oy + s * shift, oyaw)
+        self.last_hoop_along = float(expect['along'])
+        self.get_logger().info(f'hoop lane re-anchored by {shift:+.2f} m')
 
     def set_bank_frame(self, wall_end):
         """The lane walls end at the bank plane's near edge, `wall_end` ahead of the lidar.
@@ -358,14 +374,25 @@ class MissionManager(TTNode):
             [wrap_angle(o.yaw + math.pi)]
         self.get_logger().info(f'bank plane edge {near:.2f} m ahead; U-turn goal {self.variables["bank_goal"]}')
 
-    def set_entrance(self, gap):
-        """Remember the opening just entered; a probe goal inside the field lets the
-        planner start before the exit is seen."""
-        gx, gy, gyaw = gap
+    def square(self, yaw):
+        """Snap a measured lane axis to the rectilinear course grid (odom heading is kept
+        on-grid by odom_guard's wall/tag corrections) if within square_axes_deg."""
         tol = math.radians(float(self.mission.get('square_axes_deg', 0.0)))
-        square = round(gyaw / (math.pi / 2)) * (math.pi / 2)
-        if abs(wrap_angle(gyaw - square)) <= tol:
-            gyaw = wrap_angle(square)
+        grid = round(yaw / (math.pi / 2)) * (math.pi / 2)
+        return wrap_angle(grid) if abs(wrap_angle(yaw - grid)) <= tol else yaw
+
+    def set_entrance(self, gap, side=None):
+        """Remember the opening just entered; a probe goal inside the field lets the
+        planner start before the exit is seen. A side opening is cut square into the wall
+        we're following: its axis is our heading +-90 deg on the grid (edge-based axes of
+        an obliquely seen opening were up to 45 deg off)."""
+        gx, gy, gyaw = gap
+        if side in ('left', 'right'):
+            turn = math.pi / 2 if side == 'left' else -math.pi / 2
+            grid = round((self.odom.yaw + turn) / (math.pi / 2)) * (math.pi / 2)
+            gyaw = wrap_angle(grid)
+        else:
+            gyaw = self.square(gyaw)
         gap = (gx, gy, gyaw)
         self.last_gap = gap
         self.variables['gap_yaw'] = gyaw
@@ -656,7 +683,7 @@ class MissionManager(TTNode):
         when the camera is R - a before the opening's axis (the pivot is the rear axle,
         a behind the camera), end square to it end_clear before the wall, then follow
         its axis in. Reverse first if the opening was seen too late to line up."""
-        self.set_entrance(gap)
+        self.set_entrance(gap, side)
         gx, gy, gyaw = self.last_gap
         s = 1.0 if side == 'left' else -1.0
         radius = float(nav.get('turn_radius', self.variables['turn_radius']))
@@ -745,7 +772,7 @@ class MissionManager(TTNode):
                     entry = nav.get('entry', 'turn_in')
                     if entry == 'plan':
                         # Hybrid-A* on the lidar map: plans around decoys, reverses if needed.
-                        self.set_entrance(gap)
+                        self.set_entrance(gap, side)
                         gyaw = self.last_gap[2]
                         inside = float(nav.get('inside', 0.6))
                         self.send_behavior('plan_drive', {
@@ -776,6 +803,14 @@ class MissionManager(TTNode):
             return
         raise ValueError(f'unknown nav2 goal type {kind!r}')
 
+    def reject(self, why):
+        """A sensed gate not taken: say why (throttled), for tuning on the course."""
+        now = self.now_s()
+        if now - getattr(self, 'last_reject_log', -1e9) > 1.0:
+            self.last_reject_log = now
+            self.get_logger().info(f'gate rejected: {why}')
+        return None
+
     def next_gate(self, run, spec):
         if self.gate is None:
             return None
@@ -784,29 +819,36 @@ class MissionManager(TTNode):
             return None
         fx, fy = self.odom.to_robot(gx, gy)
         if fx < 0.3 or math.hypot(fx, fy) > float(spec.get('max_range', 3.0)):
-            return None
+            return self.reject(f'range fx={fx:.2f} fy={fy:.2f}')
         if any(math.hypot(gx - px, gy - py) < 0.5 for px, py in self.passed_gates):
-            return None
+            return self.reject('already passed')
         # Hoops are passed roughly in the direction of travel.
         if abs(wrap_angle(gyaw - self.odom.yaw)) > math.radians(float(spec.get('max_angle_deg', 60))):
-            return None
+            return self.reject(f'angle {math.degrees(wrap_angle(gyaw - self.odom.yaw)):.0f}')
         # Known layout: each hoop stands on a fixed line of the lane (lane frame from the
         # bucket exit); anything else is a wall/bucket artefact.
         expect = spec.get('expect')
         if expect is not None and self.lane_origin is not None:
             ox, oy, oyaw = self.lane_origin
+            # A hoop the depth image confirmed is taken as sensed: only its crossing
+            # direction is checked, not where odometry says it should be.
+            if self.gate_confirmed:
+                if abs(wrap_angle(gyaw - oyaw - math.radians(float(expect.get('yaw_deg', 0.0))))) > 0.6:
+                    return None
+                return gx, gy, gyaw
             c, s = math.cos(oyaw), math.sin(oyaw)
             along, lat = c * (gx - ox) + s * (gy - oy), -s * (gx - ox) + c * (gy - oy)
             tol = float(expect.get('tol', 0.4))
-            if 'along' in expect and abs(along - float(expect['along'])) > tol:
-                return None
-            lo, hi = expect.get('along_range', [-1e9, 1e9])
-            if not float(lo) <= along <= float(hi):
-                return None
+            # Order, not distance: the next hoop lies beyond the last one passed (lane frame
+            # is re-anchored on it). Odometry scale over a hoop spacing can be 30% off.
+            prev = self.last_hoop_along
+            ahead = along - prev
+            if not 1.0 <= ahead <= float(expect.get('max_ahead', 4.5)):
+                return self.reject(f'{ahead:.2f} m past the last hoop')
             if 'lat' in expect and abs(lat - float(expect['lat'])) > tol:
-                return None
+                return self.reject(f'lat {lat:.2f}')
             if abs(wrap_angle(gyaw - oyaw - math.radians(float(expect.get('yaw_deg', 0.0))))) > 0.5:
-                return None
+                return self.reject('axis vs lane')
             return gx, gy, gyaw
         # A hoop in a 72" lane can't be far off the lane line (rejects bucket/corner pairs).
         lane = run.pose0[2]
@@ -846,7 +888,9 @@ class MissionManager(TTNode):
                     self.next_in_queue(run)
                 else:
                     self.passed_gates.append(run.target[:2])
-                    self.variables['gate_yaw'] = run.target[2]
+                    # The car wash steers blind on this through the ribbons: keep it on-grid.
+                    self.variables['gate_yaw'] = self.square(run.target[2])
+                    self.reanchor_lane(spec.get('expect'), run.target)
                     run.done = True
                 return
             # On the final line: re-aim at fresh sightings of the same hoop, so odometry

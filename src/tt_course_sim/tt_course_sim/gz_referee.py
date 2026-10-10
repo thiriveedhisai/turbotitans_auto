@@ -65,7 +65,12 @@ class GzReferee(Node):
         self.max_speed = 0.0
 
         self.pub_start = self.create_publisher(Bool, '/race_start', LATCHED)
-        self.create_subscription(Odometry, '/zed/zed_node/odom', self.on_odom, 10)
+        self.create_subscription(Odometry, '/sim/odom_truth', self.on_odom, 10)
+        # The stack's own pose estimate (VO + guard), to log how far it drifts from the truth.
+        self.est = None
+        self.truth_odom = None
+        self.odom_err_max = 0.0
+        self.create_subscription(Odometry, p('estimate_topic', '/odom/fused'), self.on_estimate, 10)
         self.create_subscription(Bool, '/race_start', self.on_start, VOLATILE)
         self.create_subscription(String, '/mission/state', self.on_mission, 10)
         self.create_subscription(String, '/zone_event', self.on_marker, 10)
@@ -124,9 +129,25 @@ class GzReferee(Node):
         cv2.imwrite(os.path.join(self.out_dir, 'frames', f'{self.frame_n:03d}_{self.zone}.jpg'), img,
                     [cv2.IMWRITE_JPEG_QUALITY, 80])
         self.last_frame_t = self.race_time()
+    def on_estimate(self, msg):
+        q = msg.pose.pose.orientation
+        self.est = (msg.pose.pose.position.x, msg.pose.pose.position.y, quat_rpy(q)[2])
+
+    def odom_err(self):
+        if self.est is None or self.truth_odom is None:
+            return 0.0
+        return math.hypot(self.est[0] - self.truth_odom[0], self.est[1] - self.truth_odom[1])
+
+    def yaw_err_deg(self):
+        if self.est is None or self.truth_odom is None:
+            return 0.0
+        d = self.est[2] - self.truth_odom[2]
+        return math.degrees(math.atan2(math.sin(d), math.cos(d)))
+
     def on_odom(self, msg):
         sx, sy, sz, syaw = self.spawn
         p = msg.pose.pose.position
+        self.truth_odom = (p.x, p.y, quat_rpy(msg.pose.pose.orientation)[2])
         c, s = math.cos(syaw), math.sin(syaw)
         x, y, z = sx + c * p.x - s * p.y, sy + s * p.x + c * p.y, sz + p.z
         roll, pitch, yaw = quat_rpy(msg.pose.pose.orientation)
@@ -146,10 +167,12 @@ class GzReferee(Node):
         elif self.t_start is not None and self.race_time() - self.last_frame_t >= self.frame_every:
             self.save_frame('')
         if self.t_start is not None and (not self.traj or self.race_time() - self.traj[-1][0] >= 0.05):
+            err = self.odom_err()
+            self.odom_err_max = max(self.odom_err_max, err)
             self.traj.append((round(self.race_time(), 2), round(x, 3), round(y, 3), round(v, 2),
                               self.zone, self.mission_zone or '',
                               round(math.degrees(math.atan2(math.sin(yaw), math.cos(yaw))), 1),
-                              *self.cmd))
+                              *self.cmd, round(err, 3), round(self.yaw_err_deg(), 1)))
 
     def on_cmd(self, msg):
         self.cmd = (round(msg.speed, 2), round(msg.steering_angle, 3))
@@ -238,12 +261,13 @@ class GzReferee(Node):
                   'start_detector_s': (round(self.detector_fired - self.cover_removed, 2)
                                        if self.detector_fired and self.cover_removed else None),
                   'markers_seen': self.markers_seen, 'collisions': 'n/a (3D)',
+                  'odom_err_max_m': round(self.odom_err_max, 2), 'odom_err_final_m': round(self.odom_err(), 2),
                   'rails': self.course.rails, 'events': self.events}
         os.makedirs(self.out_dir, exist_ok=True)
         with open(os.path.join(self.out_dir, 'result.json'), 'w') as f:
             json.dump(result, f, indent=2)
         with open(os.path.join(self.out_dir, 'trajectory.csv'), 'w') as f:
-            f.write('t,x,y,v,true_zone,mission_zone,yaw_deg,cmd_speed,cmd_steer\n')
+            f.write('t,x,y,v,true_zone,mission_zone,yaw_deg,cmd_speed,cmd_steer,odom_err,yaw_err_deg\n')
             for row in self.traj:
                 f.write(','.join(str(v) for v in row) + '\n')
         try:
@@ -252,7 +276,8 @@ class GzReferee(Node):
         except Exception as exc:
             self.get_logger().warn(f'plot failed: {exc}')
         summary = (f'=== 3D RUN {outcome.upper()} in {result["time_s"]} s, furthest zone='
-                   f'{result["furthest_zone"]}, markers={len(self.markers_seen)} ===')
+                   f'{result["furthest_zone"]}, markers={len(self.markers_seen)}, '
+                   f'odom err max {self.odom_err_max:.2f} m ===')
         (self.get_logger().info if outcome == 'finished' else self.get_logger().error)(summary)
         raise SystemExit(0)
 

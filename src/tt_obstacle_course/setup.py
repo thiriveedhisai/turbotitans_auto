@@ -26,7 +26,8 @@ setup(
         'console_scripts': [
             f'{name} = {package_name}.{name}:main' for name in (
                 'terrain_monitor', 'start_detector', 'marker_detector', 'course_perception',
-                'behavior_executor', 'speed_governor', 'twist_to_ackermann', 'mission_manager')
+                'behavior_executor', 'speed_governor', 'twist_to_ackermann', 'mission_manager',
+                'odom_guard')
         ],
     },
 )

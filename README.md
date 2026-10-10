@@ -237,9 +237,23 @@ docker run --rm -v $PWD:/ws -w /ws tt-sim bash -c \
 
 Preview the course: `python3 -m tt_course_sim.course course.png` (in the container).
 
-A full 3-D Gazebo world (camera, AprilTags, real ramps) is the next step once
-the 2-D sim passes end to end; it adds the camera-only parts (start light,
-markers, helix rail detection) that the 2-D sim fakes.
+### 3-D Gazebo simulation
+
+`docker/run_sim3d.sh` runs the same stack in Gazebo Harmonic (DART physics, gravity,
+surface friction) on the drawing geometry: real ramps, helix, 8.5 deg bank, gravel,
+hoop legs, ZED camera with one AprilTag (tag36h11, ids 0-11) per zone, and a chase
+camera. Up to four runs can go in parallel.
+
+```bash
+docker/run_sim3d.sh r122 turn_radius:=1.22                  # 4 ft turning radius
+docker/run_sim3d.sh dusty seed:=7 turn_radius:=1.22 friction:=0.6
+docker/run_sim3d.sh hoops start_zone:=hoops seed:=3
+# results: /tmp/simout/<name>/{result.json, trajectory.csv, run.png, frames/*.jpg}
+```
+
+Verified to finish at turning radii 3-5 ft (0.91-1.52 m), random layouts and
+friction 0.6-0.8. 6 ft (1.83 m) is not supported: the 28" narrow curve's centreline
+radius is 6 ft and the bank plane is too shallow for a 6 ft U-turn.
 
 ---
 

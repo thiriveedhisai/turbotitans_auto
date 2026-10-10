@@ -23,15 +23,6 @@ def yaw_to_quat(yaw):
     return 0.0, 0.0, math.sin(yaw / 2.0), math.cos(yaw / 2.0)
 
 
-def bank_lead(radius, axle_to_camera, trigger=1.2, lidar_behind_camera=0.15, plane_depth=1.219,
-              margin=0.15, turn_in_extra=0.25):
-    """Distance to drive after the lane walls end `trigger` m ahead of the lidar, so a
-    full-lock U-turn keeps the front `margin` inside the plane's far edge. The camera
-    overshoots the turn start by hypot(R, a) - a (pivot is the rear axle) plus turn-in lag."""
-    overshoot = math.hypot(radius, axle_to_camera) - axle_to_camera + turn_in_extra
-    return max(0.0, trigger - lidar_behind_camera + plane_depth - margin - overshoot)
-
-
 class SteeringModel:
     """Maps path curvature to the AckermannDrive steering command.
 

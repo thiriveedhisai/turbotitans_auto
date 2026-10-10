@@ -38,7 +38,8 @@ def _setup(context):
     share = FindPackageShare('tt_obstacle_course').perform(context)
     tuning = lc('tuning') or os.path.join(share, 'config', 'tuning.yaml')
     world, course, spawn = generate(os.path.join(out, 'world'), seed=seed, rails=rails,
-                                    radius=radius, start_zone=start_zone, tag_map=_tag_map(tuning))
+                                    radius=radius, start_zone=start_zone, tag_map=_tag_map(tuning),
+                                    friction=float(lc('friction')))
     sim_time = {'use_sim_time': True}
 
     gz = ExecuteProcess(cmd=['gz', 'sim', '-s', '-r', '--headless-rendering', world],
@@ -53,6 +54,7 @@ def _setup(context):
                    '/gz/zed/image@sensor_msgs/msg/Image[gz.msgs.Image',
                    '/gz/zed/camera_info@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo',
                    '/gz/zed/depth_image@sensor_msgs/msg/Image[gz.msgs.Image',
+                   '/gz/chase@sensor_msgs/msg/Image[gz.msgs.Image',
                    '/gz_cmd_vel@geometry_msgs/msg/Twist]gz.msgs.Twist'],
         remappings=[('/gz/scan', '/scan'), ('/gz/imu', '/zed/zed_node/imu/data'),
                     ('/gz/odom', '/gz/odom_world'),
@@ -82,6 +84,8 @@ def generate_launch_description():
         DeclareLaunchArgument('seed', default_value='0'),
         DeclareLaunchArgument('rails', default_value='true'),
         DeclareLaunchArgument('turn_radius', default_value='1.52'),
+        DeclareLaunchArgument('friction', default_value='0.8',
+                              description='Course surface friction (painted plywood ~0.8, dusty ~0.6)'),
         DeclareLaunchArgument('start_zone', default_value=''),
         DeclareLaunchArgument('use_nav2', default_value='true'),
         DeclareLaunchArgument('timeout', default_value='600.0'),

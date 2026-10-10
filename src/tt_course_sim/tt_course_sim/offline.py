@@ -16,7 +16,7 @@ import yaml
 
 from tt_course_sim.course import FALL_DROP, Course
 from tt_obstacle_course.behaviors import RUNNING, Config, Context, StuckMonitor, make_behavior
-from tt_obstacle_course.geometry import OdomTracker, SteeringModel, bank_lead
+from tt_obstacle_course.geometry import OdomTracker, SteeringModel
 from tt_obstacle_course.scan_utils import ScanView
 
 
@@ -176,27 +176,37 @@ SCENARIOS = {
 
 
 def bank_chain(course, radius):
-    """mission.yaml bank_approach + bank_uturn: walls_end trigger, $bank_lead, semicircle."""
+    """mission.yaml bank_approach + bank_uturn: walls_end trigger, fence the plane from its
+    known size (as MissionManager.set_bank_frame), then plan_drive into the return lane."""
     with open('src/tt_obstacle_course/config/mission.yaml', encoding='utf-8') as f:
-        mission = yaml.safe_load(f)
-    entry = mission.get('bank_entry', {})
+        b = yaml.safe_load(f).get('bank_entry', {})
     r = radius or load_tuning()[0]['vehicle']['planning_min_turn_radius']
-    trig = float(entry.get('trigger', 1.2))
+    seen = []
 
     def walls_end(t, s, ok):
         e = s.walls_end() if ok and t.odom.distance >= 0.8 else None
-        return e is not None and e <= trig
+        if e is not None and e <= b['trigger']:
+            seen.append(e)
+            return True
+        return False
     status, truck = run(course, course.waypoint('bank_approach'), 'wall_center', {'speed': 0.6},
                         radius=r, stop=walls_end)
     if status != 'stopped':
         return 'no_trigger', truck
-    lead = bank_lead(r, mission.get('axle_to_camera', 0.38), **entry)
-    run(course, None, 'heading_hold', {'speed': 0.5, 'distance': lead}, radius=r, truck=truck)
+    o = truck.odom
+    c, s = math.cos(o.yaw), math.sin(o.yaw)
+    w = lambda u, v: [o.x + c * u - s * v, o.y + s * u + c * v]  # noqa: E731
+    near = seen[0] - b['lidar_behind_camera']
+    far = near + b['plane_depth'] - b['margin']
+    fence = [w(far, b['north']) + w(far, b['south']), w(near, b['north']) + w(far, b['north']),
+             w(near, b['south']) + w(far, b['south'])]
+    goal = w(near - 0.6, b['return_offset']) + [o.yaw + math.pi]
     xs = []
-    status, truck = run(course, None, 'arc_turn', {'direction': 'right', 'turn_deg': 180,
-                                                   'radius': r, 'speed': 0.5,
-                                                   'allow_kturn': False},
-                        radius=r, truck=truck, stop=lambda t, s, ok: xs.append(t.x) and False)
+    status, truck = run(course, None, 'plan_drive',
+                        {'goal': goal, 'fence': fence, 'speed': 0.45, 'reverse_speed': 0.3,
+                         'goal_tol': 0.35, 'yaw_tol': 0.6, 'margin': 1.2},
+                        radius=r, truck=truck, max_s=60.0,
+                        stop=lambda t, s, ok: xs.append(t.x) and False)
     bx, _, _, hl, _ = course.bank_box
     if max(xs) + 0.05 > bx + hl:
         return 'off_plane', truck
@@ -207,9 +217,10 @@ CHAINS = {'bank': bank_chain}
 
 
 def _in_return_lane(course, truck):
-    # Heading back west inside the 32" return lane at the pothole ramp.
+    # Heading back west inside the 32" return lane at the pothole ramp (within the
+    # plan's yaw tolerance; the pothole lane follower straightens the rest).
     x0, y0, _ = course.waypoint('bank_approach')
-    return abs(truck.y - (y0 - 1.495)) < 0.45 and math.cos(truck.yaw) < -0.9 and truck.x < x0 + 3.0
+    return abs(truck.y - (y0 - 1.495)) < 0.45 and math.cos(truck.yaw) < -0.7 and truck.x < x0 + 3.0
 
 
 def _through_narrow(course, truck):

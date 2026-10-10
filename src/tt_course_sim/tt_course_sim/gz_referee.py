@@ -15,8 +15,10 @@ import subprocess
 import rclpy
 from ackermann_msgs.msg import AckermannDrive
 from nav_msgs.msg import Odometry
+import numpy as np
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from sensor_msgs.msg import Image
 from std_msgs.msg import Bool, String
 
 from tt_course_sim.course import Course
@@ -69,6 +71,13 @@ class GzReferee(Node):
         self.create_subscription(String, '/zone_event', self.on_marker, 10)
         self.cmd = (0.0, 0.0)
         self.create_subscription(AckermannDrive, '/ackermann_cmd', self.on_cmd, 10)
+        self.frames = {'chase': None, 'zed': None}
+        self.frame_every = float(p('frame_every_s', 4.0))
+        self.last_frame_t = -1e9
+        self.frame_n = 0
+        self.create_subscription(Image, '/gz/chase', lambda m: self.on_image('chase', m), 2)
+        self.create_subscription(Image, '/zed/zed_node/rgb/color/rect/image',
+                                 lambda m: self.on_image('zed', m), 2)
         self.create_timer(0.5, self.tick)
         self.t0 = None
 
@@ -89,6 +98,32 @@ class GzReferee(Node):
             self.get_logger().info(msg)
 
     # ------------------------------------------------------------- inputs
+    def on_image(self, key, msg):
+        if msg.encoding in ('rgb8', 'bgr8') and msg.height and msg.width:
+            img = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.width, 3)
+            self.frames[key] = img[:, :, ::-1] if msg.encoding == 'rgb8' else img
+
+    def save_frame(self, label):
+        """Chase view + onboard ZED view side by side, captioned, for visual review."""
+        try:
+            import cv2
+        except ImportError:
+            return
+        chase, zed = self.frames['chase'], self.frames['zed']
+        if chase is None or zed is None:
+            return
+        h = chase.shape[0]
+        zed = cv2.resize(zed, (int(zed.shape[1] * h / zed.shape[0]), h))
+        img = np.ascontiguousarray(np.hstack([chase, zed]))
+        v = self.pose[5] if self.pose else 0.0
+        text = f't={self.race_time():5.1f}s  zone={self.zone}  mission={self.mission_zone}  v={v:.2f} m/s  {label}'
+        cv2.rectangle(img, (0, 0), (img.shape[1], 30), (0, 0, 0), -1)
+        cv2.putText(img, text, (8, 21), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+        os.makedirs(os.path.join(self.out_dir, 'frames'), exist_ok=True)
+        self.frame_n += 1
+        cv2.imwrite(os.path.join(self.out_dir, 'frames', f'{self.frame_n:03d}_{self.zone}.jpg'), img,
+                    [cv2.IMWRITE_JPEG_QUALITY, 80])
+        self.last_frame_t = self.race_time()
     def on_odom(self, msg):
         sx, sy, sz, syaw = self.spawn
         p = msg.pose.pose.position
@@ -103,8 +138,13 @@ class GzReferee(Node):
         self.check_finish_line(x, y)
         if zone and zone != self.zone:
             if self.t_start is not None:
+                if zone not in self.zones:
+                    self.zone = zone
+                    self.save_frame('zone entry')
                 self.zones.setdefault(zone, round(self.race_time(), 2))
             self.zone = zone
+        elif self.t_start is not None and self.race_time() - self.last_frame_t >= self.frame_every:
+            self.save_frame('')
         if self.t_start is not None and (not self.traj or self.race_time() - self.traj[-1][0] >= 0.05):
             self.traj.append((round(self.race_time(), 2), round(x, 3), round(y, 3), round(v, 2),
                               self.zone, self.mission_zone or '',

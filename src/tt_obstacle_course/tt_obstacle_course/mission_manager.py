@@ -27,7 +27,7 @@ from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Bool, Float32, String
 
-from tt_obstacle_course.geometry import (OdomTracker, bank_lead, quat_to_rpy, wrap_angle,
+from tt_obstacle_course.geometry import (OdomTracker, quat_to_rpy, wrap_angle,
                                          yaw_to_quat)
 from tt_obstacle_course.ros_common import RELIABLE_SUB, TTNode, dumps, odom_update
 from tt_obstacle_course.ros_common import run as run_node
@@ -117,6 +117,7 @@ class StepRun:
         self.fallback = False
         self.searches = 0
         self.target = None
+        self.t_reaim = 0.0
         self.terrain_seen = set()
         self.queue = []
 
@@ -264,7 +265,6 @@ class MissionManager(TTNode):
         offset = cam_r - float(h.get('centerline', 1.22)) - float(h.get('margin', 0.05))
         offset = max(0.0, min(float(h.get('max_offset', 0.25)), offset))
         values = {'helix_offset': round(offset, 3), 'turn_radius': radius, 'axle_to_camera': axle}
-        values['bank_lead'] = round(bank_lead(radius, axle, **self.mission.get('bank_entry', {})), 3)
         # Side-gap turn-in: follow the wall this far out so a full-lock 90 deg turn ends
         # end_clear before the wall line, square to the opening.
         end_clear = float(self.mission.get('gap_entry', {}).get('end_clear', 0.3))
@@ -284,7 +284,8 @@ class MissionManager(TTNode):
                     self.get_logger().warn(f'{name} not known yet; dropping param {k}')
                     continue
                 v = self.variables[name]
-                v = [sign * x for x in v] if isinstance(v, list) else sign * v
+                if sign < 0:
+                    v = [-x for x in v] if isinstance(v, list) else -v
             out[k] = v
         return out
 
@@ -340,10 +341,32 @@ class MissionManager(TTNode):
         """Start of the 72" hoop lane: hoop lines are measured from here."""
         self.lane_origin = (x, y, yaw)
 
+    def set_bank_frame(self, wall_end):
+        """The lane walls end at the bank plane's near edge, `wall_end` ahead of the lidar.
+        From the fixed plane size, fence its far and side edges (drop-offs the lidar can't
+        see) and set a goal in the return lane, for the U-turn planner."""
+        b = self.mission.get('bank_entry', {})
+        o = self.odom
+        c, s = math.cos(o.yaw), math.sin(o.yaw)
+        w = lambda u, v: [o.x + c * u - s * v, o.y + s * u + c * v]  # noqa: E731
+        near = wall_end - float(b.get('lidar_behind_camera', 0.15))
+        far = near + float(b.get('plane_depth', 1.219)) - float(b.get('margin', 0.15))
+        north, south = float(b.get('north', 0.80)), float(b.get('south', -2.40))
+        self.variables['bank_fence'] = [w(far, north) + w(far, south), w(near, north) + w(far, north),
+                                        w(near, south) + w(far, south)]
+        self.variables['bank_goal'] = w(near - 0.6, float(b.get('return_offset', -1.73))) + \
+            [wrap_angle(o.yaw + math.pi)]
+        self.get_logger().info(f'bank plane edge {near:.2f} m ahead; U-turn goal {self.variables["bank_goal"]}')
+
     def set_entrance(self, gap):
         """Remember the opening just entered; a probe goal inside the field lets the
         planner start before the exit is seen."""
         gx, gy, gyaw = gap
+        tol = math.radians(float(self.mission.get('square_axes_deg', 0.0)))
+        square = round(gyaw / (math.pi / 2)) * (math.pi / 2)
+        if abs(wrap_angle(gyaw - square)) <= tol:
+            gyaw = wrap_angle(square)
+        gap = (gx, gy, gyaw)
         self.last_gap = gap
         self.variables['gap_yaw'] = gyaw
         d = float(self.mission.get('exit_hint', {}).get('depth', 3.67)) * 0.6
@@ -421,10 +444,12 @@ class MissionManager(TTNode):
         self.nav.cancel()
         self.step_idx += 1
         steps = self.zone.get('steps', [])
-        # Recovery steps run only when the step before them failed.
-        while self.step_idx < len(steps) and steps[self.step_idx].get('only_if_failed') \
-                and not prev_failed:
-            self.step_idx += 1
+        # Recovery blocks (only_if_failed) run only when the step before the block failed.
+        prev_recovery = 0 < self.step_idx <= len(steps) and \
+            steps[self.step_idx - 1].get('only_if_failed', False)
+        if not (prev_failed or prev_recovery):
+            while self.step_idx < len(steps) and steps[self.step_idx].get('only_if_failed'):
+                self.step_idx += 1
         if self.step_idx >= len(steps):
             self.enter_zone(self.zone_idx + 1)
             return
@@ -511,7 +536,10 @@ class MissionManager(TTNode):
             if not self.lidar_ok or self.scan is None:
                 return False
             end = self.scan.walls_end()
-            return end is not None and end <= float(val)
+            if end is not None and end <= float(val):
+                self.set_bank_frame(end)
+                return True
+            return False
         if kind == 'exit_seen':
             # Opening in the far wall confirmed by perception since this step began.
             g = self.gaps.get('front')
@@ -628,8 +656,8 @@ class MissionManager(TTNode):
         when the camera is R - a before the opening's axis (the pivot is the rear axle,
         a behind the camera), end square to it end_clear before the wall, then follow
         its axis in. Reverse first if the opening was seen too late to line up."""
-        gx, gy, gyaw = gap
         self.set_entrance(gap)
+        gx, gy, gyaw = self.last_gap
         s = 1.0 if side == 'left' else -1.0
         radius = float(nav.get('turn_radius', self.variables['turn_radius']))
         a = self.variables['axle_to_camera']
@@ -718,6 +746,7 @@ class MissionManager(TTNode):
                     if entry == 'plan':
                         # Hybrid-A* on the lidar map: plans around decoys, reverses if needed.
                         self.set_entrance(gap)
+                        gyaw = self.last_gap[2]
                         inside = float(nav.get('inside', 0.6))
                         self.send_behavior('plan_drive', {
                             'goal': [gx + inside * math.cos(gyaw), gy + inside * math.sin(gyaw), gyaw],
@@ -806,6 +835,10 @@ class MissionManager(TTNode):
         max_angle = math.radians(float(spec.get('max_approach_deg', 45.0)))
         radius = float(self.param('vehicle.planning_min_turn_radius', 1.52))
         lane_yaw = run.pose0[2]
+        expect = spec.get('expect')
+        if expect is not None and self.lane_origin is not None:
+            # Known layout: search along the hoop's expected axis, not our current heading.
+            lane_yaw = wrap_angle(self.lane_origin[2] + math.radians(float(expect.get('yaw_deg', 0.0))))
 
         if run.phase == 'approach':
             if self.bstatus.get(self.cmd_id) in ('done', 'failed'):
@@ -815,6 +848,19 @@ class MissionManager(TTNode):
                     self.passed_gates.append(run.target[:2])
                     self.variables['gate_yaw'] = run.target[2]
                     run.done = True
+                return
+            # On the final line: re-aim at fresh sightings of the same hoop, so odometry
+            # drift since it was first seen doesn't steer us into a leg.
+            fresh = self.next_gate(run, spec) if not run.queue and 'target' not in spec else None
+            if fresh is not None and run.target is not None and now - run.t_reaim > 0.5:
+                moved = math.hypot(fresh[0] - run.target[0], fresh[1] - run.target[1])
+                if 0.08 < moved < 0.5:
+                    gx, gy, gyaw = fresh
+                    run.target = fresh
+                    run.t_reaim = now
+                    self.send_behavior('heading_hold', {
+                        'heading_abs': gyaw, 'line_point': [gx, gy], 'past_point': beyond,
+                        'max_approach_deg': math.degrees(max_angle), 'speed': speed})
             return
 
         gate = self.next_gate(run, spec)
@@ -856,6 +902,11 @@ class MissionManager(TTNode):
         run.searches += 1
         if run.searches > int(spec.get('max_search', 4)):
             self.get_logger().warn('no gate found, moving on')
+            # Later steps steer off $gate_yaw: use the hoop's expected axis instead.
+            expect = spec.get('expect')
+            if expect is not None and self.lane_origin is not None:
+                self.variables['gate_yaw'] = wrap_angle(
+                    self.lane_origin[2] + math.radians(float(expect.get('yaw_deg', 0.0))))
             run.failed = True
             return
         self.send_behavior('heading_hold', {'heading_abs': lane_yaw, 'speed': speed,

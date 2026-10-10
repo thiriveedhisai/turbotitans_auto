@@ -7,6 +7,9 @@ marker_skip_max: 2           # a marker up to N zones ahead jumps straight there
 marker_skip_min_time_s: 2.0
 marker_lead_m: 1.3           # act on a marker after driving this far (it's seen ahead)
 axle_to_camera: 0.38         # MEASURE rear axle to ZED camera (the odometry point)
+# The course is rectilinear and odometry starts square to the start lane, so a measured
+# lane axis within this many degrees of a multiple of 90 deg is snapped to it (0 = off).
+square_axes_deg: 30
 
 # Bucket-field exit fallback if it is never seen (it moves, but stays on the far wall):
 # depth = entrance line -> far wall, from_wall = exit centre from the `wall` side wall.
@@ -24,10 +27,11 @@ hoop_lane: {connector: 0.83}
 # computed from vehicle.planning_min_turn_radius; it is 0 once R <= ~1.2 m.
 helix_entry: {centerline: 1.22, margin: 0.05, max_offset: 0.25}
 
-# Bank U-turn start: $bank_lead (from the turning radius) is driven after both lane
-# walls are seen to end `trigger` m ahead of the lidar (= the plane edge).
+# Bank plane relative to the truck (centred in the entry lane) when the lane walls are
+# seen to end `trigger` m ahead of the lidar: plane side edges (left +) and the
+# return-lane centre 0.6 m before the plane. From the drawing; MEASURE on the course.
 bank_entry: {trigger: 1.2, lidar_behind_camera: 0.15, plane_depth: 1.219, margin: 0.15,
-             turn_in_extra: 0.25}
+             north: 0.80, south: -2.40, return_offset: -1.73}
 
 zones:
   - name: start
@@ -99,6 +103,15 @@ zones:
         params: {speed: 0.8}
         until: [yaw>=75, marker=gravel, terrain=rough]
         after_distance: 2.0
+      # Wedged in the curve (tight at R ~ 6 ft): plan forward/reverse into the free lane
+      # ahead, then lane-follow on.
+      - behavior: plan_drive
+        params: {goal_from_gap: 1.5, speed: 0.4, goal_tol: 0.3, yaw_tol: 0.5, margin: 1.0}
+        only_if_failed: true
+      - behavior: wall_center
+        params: {speed: 0.6, distance: 3.0}
+        until: [done, marker=gravel, terrain=rough]
+        only_if_failed: true
 
   # 2" ramp up (32"), 4x8 ft pea gravel (48"), 2" ramp down, flat: ~6 m of walled lane.
   - name: gravel
@@ -121,20 +134,23 @@ zones:
         after_distance: 0.8
 
   # Right U-turn on the 8.5 deg plane (lidar blind while tilted, no walls, 7" drop at
-  # the far edge): drive $bank_lead, then one full-lock semicircle whose swept front
-  # stays 0.15 m inside the 48" depth. It ends in the return lane (~1.9 m to the
-  # right) for R 0.9-1.22.
+  # the far edge). The plane's far/side edges are fenced from the fixed plane size
+  # (relative to where the lane walls end) and Hybrid-A* plans a single sweep or a
+  # multi-point turn as the turning radius requires, ending in the return lane.
   - name: bank_uturn
     speed_cap: 0.5
-    timeout_s: 25
+    timeout_s: 40
     allow_marker_skip: false
     steps:
-      - behavior: heading_hold
-        params: {speed: 0.5, distance: $bank_lead}
+      - behavior: plan_drive
+        params: {goal: $bank_goal, fence: $bank_fence, speed: 0.45, reverse_speed: 0.3,
+                 goal_tol: 0.35, yaw_tol: 0.6, margin: 1.2}
+        until: [done]
+      # Planner gave up: the radius-specific single sweep.
       - behavior: arc_turn
         params: {direction: right, turn_deg: 180, radius: $turn_radius, speed: 0.5,
-                 allow_kturn: false}
-        until: [done]
+                 allow_kturn: true}
+        only_if_failed: true
 
   - name: pothole
     speed_cap: 0.7
@@ -235,7 +251,8 @@ zones:
     speed_cap: 1.0
     allow_marker_skip: false
     steps:
-      - behavior: heading_hold
-        params: {speed: 0.8, distance: 1.8}
+      # Centre through the 48" -> 32" funnel and across the line.
+      - behavior: wall_center
+        params: {speed: 0.6, distance: 1.8}
       - behavior: stop
         until: [time>=0.3]

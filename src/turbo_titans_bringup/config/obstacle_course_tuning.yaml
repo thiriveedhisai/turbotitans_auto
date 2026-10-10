@@ -108,7 +108,7 @@ obstacle_perception:
     dropoff_height: 0.05               # ground this far below plane = edge (bridge/helix/bank)
     min_gap_width_margin: 0.25         # opening must be vehicle.width + this
     min_gap_depth_beyond: 1.5          # range past the wall line; rejects closed notches
-    hoop_post_spacing_tol: 0.10
+    hoop_post_spacing_tol: 0.18
 
 # ------------------------------------------------ behaviors
 behaviors:

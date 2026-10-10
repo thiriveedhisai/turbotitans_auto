@@ -192,7 +192,17 @@ class ScanView:
         r = self.ranges[m]
         if side < 0:
             a, r = a[::-1], r[::-1]
-        return _openings(a, r, r * np.abs(np.sin(a)), min_width, depth_beyond)
+        found = _openings(a, r, r * np.abs(np.sin(a)), min_width, depth_beyond)
+        # Seen obliquely, the two edge returns sit at different depths (wall end vs far
+        # jamb) and skew the edge-to-edge normal by 10-20 deg. The opening is square to
+        # the wall it is cut into, so take the axis from the fitted wall when there is one.
+        wall = self.lane_walls(max_half_width=2.0, x_min=-1.5, x_max=1.5).get(side)
+        if wall is not None and wall[2] >= 6 and abs(wall[1]) < 0.7:
+            axis = math.atan(wall[1]) + side * math.pi / 2
+            for g in found:
+                if abs(math.atan2(math.sin(g['yaw'] - axis), math.cos(g['yaw'] - axis))) < 35 * DEG:
+                    g['yaw'] = axis
+        return found
 
     def find_front_openings(self, min_width, depth_beyond, half_angle=60 * DEG):
         """Openings in the wall ahead (roughly square to the heading) that lead somewhere."""
@@ -226,8 +236,10 @@ class ScanView:
                     clusters.append((float(cx.mean()), float(cy.mean())))
                 start = k
         # Sparse returns from a wall seen at a grazing angle look like posts: drop
-        # anything lying on a fitted side wall.
-        walls = [w for w in self.lane_walls(max_half_width=1.2, x_max=max_range).values() if w]
+        # anything lying on a fitted side wall. Only near-parallel fits are walls; a steep
+        # fit (e.g. across a U-turn bowl) is usually threaded through the legs themselves.
+        walls = [w for w in self.lane_walls(max_half_width=1.2, x_max=max_range).values()
+                 if w and abs(w[1]) <= 0.6]
         clusters = [(px, py) for px, py in clusters
                     if all(abs(py - (w[0] + w[1] * px + w[3] * px * px)) > 0.1 for w in walls)]
 

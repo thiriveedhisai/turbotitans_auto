@@ -95,6 +95,8 @@ def plan(start, goal, grid, footprint, radius, step=0.3, xy_res=0.15, yaw_bins=3
     gx, gy, gyaw = goal
     if collides(gx, gy, gyaw):
         return None
+    # Starting inside the safety margin (e.g. after a slip): let the first moves out.
+    escape = 0.35 if collides(*start) else 0.0
     prims = []
     for d in ((1, -1) if allow_reverse else (1,)):
         for k in (-1.0 / radius, 0.0, 1.0 / radius):
@@ -135,7 +137,8 @@ def plan(start, goal, grid, footprint, radius, step=0.3, xy_res=0.15, yaw_bins=3
                     nyaw = yaw + s * k
                     nx_ = x + (math.sin(nyaw) - math.sin(yaw)) / k
                     ny_ = y - (math.cos(nyaw) - math.cos(yaw)) / k
-                if collides(nx_, ny_, nyaw):
+                if collides(nx_, ny_, nyaw) and \
+                        math.hypot(nx_ - start[0], ny_ - start[1]) > escape:
                     ok = False
                     break
                 px, py, pyaw = nx_, ny_, nyaw

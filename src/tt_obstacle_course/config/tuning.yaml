@@ -120,7 +120,7 @@ course_perception:
     front_gap_max_width: 1.4
     front_gap_depth_beyond: 1.0
     gate_width: 0.635                  # hoop legs 20-30" apart (organiser): 25" +- 5"
-    hoop_post_spacing_tol: 0.13
+    hoop_post_spacing_tol: 0.18          # 20-30" plus ~5 cm leg-centroid error
     post_max_extent: 0.15
     post_isolation: 0.12               # hoops can stand ~0.2 m from a bale wall
     persist_scans: 3

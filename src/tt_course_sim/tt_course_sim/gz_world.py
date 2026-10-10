@@ -2,7 +2,7 @@
 
 Static course: hay-bale walls, rails, ramp/bridge/helix/bank slabs, gravel and
 pothole bumps, buckets, hoops, car-wash ribbons (visual only: seen by lidar and
-camera, no collision), AprilTag markers on overhead panels, and the start light
+camera, no collision), AprilTag 36h11 zone markers (one tag id per zone), and the start light
 (green disc behind a red cover the referee removes at race start).
 
 Truck: Ackermann steering (rear drive), gpu_lidar, RGB-D camera, IMU, ground
@@ -22,6 +22,9 @@ CAM_H = 0.20                # camera height above ground
 WHEELBASE = 0.32
 AXLE_TO_CAMERA = 0.38
 TRACK = 0.18
+# Course-surface friction; contacts use min(tyre, surface). RC rubber on painted plywood
+# is ~0.7-0.9, dusty ~0.6. Set per world by generate(friction=...).
+SURFACE_MU = 0.8
 
 
 def _pose(x, y, z, roll=0.0, pitch=0.0, yaw=0.0):
@@ -31,8 +34,8 @@ def _pose(x, y, z, roll=0.0, pitch=0.0, yaw=0.0):
 def _box_link(name, pose, size, rgba, collide=True, extra_visual=''):
     sx, sy, sz = size
     col = (f'<collision name="c"><geometry><box><size>{sx:.4f} {sy:.4f} {sz:.4f}</size></box>'
-           f'</geometry><surface><friction><ode><mu>1.0</mu><mu2>1.0</mu2></ode></friction>'
-           f'</surface></collision>') if collide else ''
+           f'</geometry><surface><friction><ode><mu>{SURFACE_MU}</mu><mu2>{SURFACE_MU}</mu2></ode>'
+           f'</friction></surface></collision>') if collide else ''
     return (f'<link name="{name}">{pose}{col}<visual name="v"><geometry><box>'
             f'<size>{sx:.4f} {sy:.4f} {sz:.4f}</size></box></geometry>'
             f'<material><diffuse>{rgba}</diffuse><ambient>{rgba}</ambient>{extra_visual}'
@@ -176,6 +179,11 @@ def truck_sdf(pose, radius):
         '<depth_camera><clip><near>0.3</near><far>10</far></clip></depth_camera></camera></sensor>'
         '<sensor name="imu" type="imu"><topic>/gz/imu</topic><update_rate>100</update_rate>'
         '<always_on>1</always_on><gz_frame_id>zed_imu_link</gz_frame_id></sensor>'
+        # Third-person view for the run visualisation only (not used by the stack).
+        '<sensor name="chase" type="camera"><pose>-1.4 0 0.9 0 0.5 0</pose><topic>/gz/chase</topic>'
+        '<update_rate>2</update_rate><always_on>1</always_on><camera><horizontal_fov>1.3</horizontal_fov>'
+        '<image><width>640</width><height>480</height><format>R8G8B8</format></image>'
+        '<clip><near>0.1</near><far>30</far></clip></camera></sensor>'
         '</link>')
     parts = [chassis,
              _steer('fl_steer', xf, half, wz, limit), _steer('fr_steer', xf, -half, wz, limit),
@@ -219,8 +227,10 @@ def make_tags(out_dir, zones_to_ids, size_px=400, border=0.15):
     return files
 
 
-def generate(out_dir, seed=0, rails=True, radius=1.52, start_zone='', tag_map=None):
+def generate(out_dir, seed=0, rails=True, radius=1.52, start_zone='', tag_map=None, friction=0.8):
     """Write world.sdf + tag textures into out_dir. Returns (world_path, course, spawn)."""
+    global SURFACE_MU
+    SURFACE_MU = friction
     os.makedirs(out_dir, exist_ok=True)
     c = Course(rails=rails, seed=seed)
     rng = np.random.default_rng(seed + 100)

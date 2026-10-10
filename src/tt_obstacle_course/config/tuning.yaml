@@ -1,0 +1,191 @@
+# Obstacle-course tuning: the one file to edit on the field.
+# Units: SI (m, s, rad, m/s) unless the name says otherwise. MEASURE = placeholder.
+# Lidar distances are measured from the lidar centre, not the bumper.
+# Nav2 knobs live in nav2_params.yaml; keep min turning radius in sync there.
+
+/**:
+  ros__parameters:
+    odom_topic: "/odom/fused"          # odom_guard output (ZED odometry + dropout handling)
+    scan_topic: "/scan"
+    scan_yaw_offset: 0.0               # rad; rotate scan so 0 = vehicle forward
+    scan_flip: false                   # true if the lidar is mounted upside down
+    laser_offset_x: -0.15              # MEASURE lidar position relative to ZED camera (fwd +)
+    laser_offset_y: 0.0
+    camera_height: 0.20                # MEASURE ZED left-lens centre above the ground
+    vehicle:
+      wheelbase: 0.32                  # MEASURE (axle to axle)
+      width: 0.20
+      length: 0.50
+      height: 0.25
+      ground_clearance: 0.076
+      lidar_to_front: 0.20             # MEASURE lidar centre to front bumper
+      lidar_to_rear: 0.30              # MEASURE lidar centre to rear bumper
+      lidar_ahead_of_axle: 0.23        # MEASURE lidar centre ahead of the rear axle (turn centre)
+      # 3.5 ft target after the servo fix; launch arg turn_radius overrides everywhere.
+      planning_min_turn_radius: 1.07
+      max_steer_cmd: 0.5               # must equal rc_car_controller max_steering_angle
+
+# ------------------------------------------------ real-world speed/steer calibration
+rc_car_controller:
+  ros__parameters:
+    input_topic: "/ackermann_cmd"
+    pca_osc_clock_hz: 25000000         # PCA9685 is often 26-27 MHz; calibrate with a scope
+    steer_trim_us: 0
+    speed_map_mode: "table"
+    # Raw measured pulses (forward > neutral). Fill from a calibration run.
+    fwd_speed_mps: [0.0, 0.3, 0.6, 1.0, 1.5, 2.0, 3.0]
+    fwd_pulse_us: [1500, 1565, 1590, 1615, 1650, 1690, 1770]
+    rev_speed_mps: [0.0, -0.3, -0.6, -1.0]
+    rev_pulse_us: [1500, 1435, 1410, 1380]
+    esc_deadband_us: 40
+    esc_reverse_mode: "double_tap"     # most hobby ESCs brake on the first reverse pulse
+    esc_reverse_brake_ms: 120
+    esc_reverse_neutral_ms: 120
+    speed_scale: 1.0                   # quick global fudge: real/commanded mismatch
+    speed_feedback_enabled: true       # ZED odometry closes the loop (no encoders)
+    speed_feedback_topic: "/zed/zed_node/odom"
+    speed_kp_us_per_mps: 40.0
+    speed_ki_us_per_m: 25.0
+    speed_i_limit_us: 80.0
+    speed_correction_limit_us: 150.0
+
+# ------------------------------------------------ final arbitration + safety
+speed_governor:
+  ros__parameters:
+    global_speed_scale: 1.0            # scales every zone cap at once
+    max_speed: 2.5
+    max_reverse_speed: 0.6
+    max_accel: 1.5
+    max_decel: 3.0
+    max_lateral_accel: 2.5             # rollover guard: v <= sqrt(a_lat * R)
+    steer_rate_limit: 3.0              # steer-command units per second
+    corridor_margin: 0.08              # collision strip = vehicle.width/2 + this
+    front_half_angle_deg: 35.0         # widest allowed car-wash blind cone
+    slow_distance: 0.8
+    stop_distance: 0.33                # keep below k_turn.front_clearance
+    rear_stop_distance: 0.43           # lidar is ~0.30 ahead of the rear bumper
+    ttc_brake_s: 0.6
+    crawl_speed: 0.15
+    degraded_speed_cap: 0.4            # while odom_guard is dead-reckoning a ZED dropout
+
+# ------------------------------------------------ ZED tracking-dropout handling
+odom_guard:
+  ros__parameters:
+    zed_odom_topic: "/zed/zed_node/odom"
+    freeze_s: 0.5                      # commanded + scene moving but ZED still this long -> dropout
+    stale_s: 0.3                       # or no ZED message this long
+    cmd_min_speed: 0.12
+    dead_reckon_speed_scale: 0.85      # MEASURE: real/commanded speed at low speed
+    freeze_distance: 0.01
+    resume_distance: 0.03              # ZED moving again this much in 0.3 s -> tracking back
+    scan_compare_s: 0.5
+    scan_change_m: 0.04                # a beam 'changed' if its range moved this much
+    scan_moving_fraction: 0.03         # moving 0.2 m changes 6-20% of beams (even a straight tunnel), still <1%
+    wall_heading_tol_deg: 8.0          # straight parallel lane walls within this of the course grid correct yaw
+    wall_heading_gain: 0.08            # per scan (10 Hz): ~1 s time constant
+    tag_heading_gain: 0.04             # AprilTags hang flat on course walls: their normal is on the grid too
+    tag_heading_max_range: 2.5
+
+# ------------------------------------------------ perception
+start_detector:
+  ros__parameters:
+    hsv_lower: [40, 80, 60]
+    hsv_upper: [85, 255, 255]
+    min_area_px: 400
+    min_circularity: 0.6
+    depth_min: 0.3
+    depth_max: 4.0
+    confirm_frames: 6
+    require_transition: true           # green must appear, not already be there
+    absent_frames: 5
+    downscale: 0.5
+
+marker_detector:
+  ros__parameters:
+    family: "tag36h11"
+    tag_size: 0.20                     # MEASURE printed black-square edge
+    max_range: 6.0
+    trigger_range: 1.5                 # zone events only when this close
+    min_side_px: 12.0
+    confirm_frames: 2
+    tag_ids: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    tag_zones: ["start", "ramp_up", "tunnel", "narrow", "gravel", "bank_approach",
+                "pothole", "wide", "buckets", "hoops", "car_wash", "finish"]
+
+terrain_monitor:
+  ros__parameters:
+    imu_topic: "/zed/zed_node/imu/data"
+    level_calibration_s: 2.0           # robot must be still and level at boot
+    vibration_window_s: 0.3
+    vibration_highpass_hz: 5.0
+    vibration_rms_levels: [1.0, 2.5, 4.0]     # m/s^2
+    vibration_speed_caps: [1.5, 0.9, 0.5]
+    ramp_pitch_enter_deg: 4.0
+    ramp_pitch_exit_deg: 2.0
+    bank_roll_enter_deg: 5.0
+    bank_roll_exit_deg: 3.0
+    tip_roll_warn_deg: 15.0
+    tip_roll_abort_deg: 22.0
+    tip_pitch_abort_deg: 25.0
+    tip_warn_speed_cap: 0.3
+    lidar_gate_tilt_deg: 4.0
+    state_hold_s: 0.3
+
+course_perception:
+  ros__parameters:
+    min_gap_width_margin: 0.25         # opening must be vehicle.width + this
+    min_gap_depth_beyond: 1.5          # range past the wall line; rejects closed notches
+    gap_max_angle_deg: 110.0           # ignore openings behind (e.g. the lane just left)
+    front_gap_min_width: 0.6           # bucket-field exit is 36"
+    front_gap_max_width: 1.4
+    front_gap_depth_beyond: 1.0
+    gate_width: 0.635                  # hoop legs 20-30" apart (organiser): 25" +- 5"
+    hoop_post_spacing_tol: 0.18          # 20-30" plus ~5 cm leg-centroid error
+    post_max_extent: 0.15
+    post_isolation: 0.12               # hoops can stand ~0.2 m from a bale wall
+    persist_scans: 3
+    match_distance: 0.3
+
+# ------------------------------------------------ behaviors
+behavior_executor:
+  ros__parameters:
+    rate_hz: 20.0
+    sweep_margin: 0.15                 # blocked-check strip = vehicle.width/2 + this
+    heading_hold:
+      kp: 2.0
+      kd: 0.1
+    wall_center:
+      lookahead: 0.0                   # m from the rear axle; 0 = 0.5 + 0.6 * speed (0.7-1.4)
+    gap_follow:
+      max_range: 3.0
+      bubble_radius: 0.30
+      free_range: 0.8
+      goal_heading_gain: 0.4
+      min_width: 0.35
+    arc_turn:
+      yaw_rate_kp: 0.8
+      edge_correction_gain: 0.5
+      tolerance_deg: 5.0
+    k_turn:
+      front_clearance: 0.45
+      rear_clearance: 0.40
+      leg_max_distance: 0.6
+      leg_speed: 0.4
+      heading_tolerance_deg: 10.0
+      max_legs: 8
+    stuck:
+      min_speed: 0.05
+      time_s: 1.5
+      backoff_distance: 0.3
+      max_retries: 3
+
+twist_to_ackermann:
+  ros__parameters:
+    cmd_vel_topic: "/cmd_vel"
+    min_speed: 0.02
+
+mission_manager:
+  ros__parameters:
+    use_nav2: true
+    nav2_action: "navigate_to_pose"
+    odom_frame: "odom"

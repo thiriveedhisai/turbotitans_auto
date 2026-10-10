@@ -1,0 +1,274 @@
+# Course plan, in driving order. Plain YAML read by mission_manager.
+# Edit speeds/distances here; per-behavior gains live in tuning.yaml.
+# Turn directions follow the course drawing. Distances are approximate from the
+# drawing and should be checked on the real course.
+
+marker_skip_max: 2           # a marker up to N zones ahead jumps straight there
+marker_skip_min_time_s: 2.0
+marker_lead_m: 1.3           # act on a marker after driving this far (it's seen ahead)
+axle_to_camera: 0.38         # MEASURE rear axle to ZED camera (the odometry point)
+# The course is rectilinear and odometry starts square to the start lane, so a measured
+# lane axis within this many degrees of a multiple of 90 deg is snapped to it (0 = off).
+square_axes_deg: 30
+
+# Bucket-field exit fallback if it is never seen (it moves, but stays on the far wall):
+# depth = entrance line -> far wall, from_wall = exit centre from the `wall` side wall.
+exit_hint: {depth: 3.67, wall: right, from_wall: 1.42, approach: 0.8}
+
+# Side-opening turn-in (bucket field): finish the full-lock turn this far before the
+# wall line, square to the opening ($turn_in_offset = R + axle_to_camera + end_clear).
+gap_entry: {end_clear: 0.3}
+
+# Bucket-field exit -> start of the 72" hoop lane (36" connector). MEASURE.
+hoop_lane: {connector: 0.83}
+
+# Helix entry: with a large turning radius the truck must enter toward the
+# helix's outer side to stay concentric. The offset ($helix_offset) is
+# computed from vehicle.planning_min_turn_radius; it is 0 once R <= ~1.2 m.
+helix_entry: {centerline: 1.22, margin: 0.05, max_offset: 0.25}
+
+# Bank plane relative to the truck (centred in the entry lane) when the lane walls are
+# seen to end `trigger` m ahead of the lidar: plane side edges (left +) and the
+# return-lane centre 0.6 m before the plane. From the drawing; MEASURE on the course.
+bank_entry: {trigger: 1.2, lidar_behind_camera: 0.15, plane_depth: 1.219, margin: 0.15,
+             north: 0.80, south: -2.40, return_offset: -1.73}
+
+zones:
+  - name: start
+    speed_cap: 1.5
+    timeout_s: 20
+    steps:
+      - behavior: wall_center
+        params: {speed: 1.5}
+        until: [terrain=ramp_up, marker=ramp_up]
+
+  # 20% straight ramp up to a 25" bridge. Lidar is gated off while tilted, so
+  # this is heading-hold on the direction lined up in the start corridor,
+  # shifted right (helix outer side) by $helix_offset (0.25 m at R=1.52, 0 at R=1.2).
+  - name: ramp_up
+    speed_cap: 0.9
+    timeout_s: 12
+    steps:
+      - behavior: heading_hold
+        params: {speed: 0.9, lateral_offset: -$helix_offset}
+        # Odometry height plateaus at the crest (25" bridge); IMU pitch is the fallback.
+        until: [rise>=0.60, left=ramp_up]
+
+  # The turn pivots on the REAR AXLE, so it must start when the rear axle reaches the
+  # helix arc: 32" bridge + ~31" landing = 1.6 m past the crest. ramp_up ends on the
+  # odometry rise (camera ~0.15 m before the crest, speed independent):
+  # 0.15 + 1.6 + axle_to_camera 0.38 = 2.13. MEASURE on the real bridge.
+  - name: bridge
+    speed_cap: 0.5
+    timeout_s: 10
+    allow_marker_skip: false
+    steps:
+      - behavior: heading_hold
+        params: {speed: 0.5}
+        until: [distance>=2.13, terrain=ramp_down]
+
+  # 270 deg left helix, ~4 ft centreline radius, 11% down, ~6" rails (90% sure).
+  # Asks for the centreline radius; if the truck can't turn that tight it
+  # holds full lock and relies on $helix_offset to stay near-concentric.
+  - name: helix
+    speed_cap: 0.5
+    timeout_s: 30
+    allow_marker_skip: false     # must start exactly at the ramp-down, not early
+    steps:
+      - behavior: arc_turn
+        params: {direction: left, turn_deg: 270, radius: 1.22, speed: 0.5, allow_kturn: false}
+        until: [done]
+
+  # 5 ft tunnel under the bridge, then the 32" x 10 ft corridor. Undo the
+  # entry offset first (the helix exits off the tunnel axis by the same amount).
+  - name: tunnel
+    speed_cap: 1.0
+    timeout_s: 15
+    steps:
+      # Walls are visible from the helix exit: centre on them rather than hold the
+      # heading arc_turn ended on (stops 5 deg short, steering still unwinding).
+      - behavior: wall_center
+        params: {speed: 0.5, distance: 1.0}
+      - behavior: wall_center
+        params: {speed: 1.0}
+        until: [distance>=3.2, marker=narrow]
+
+  # 20" straight, then a 28" wide right curve (~6 ft radius) into the gravel lane.
+  # The fitted-lane follower tracks the curve (offline 10 s vs 17 s follow-the-gap).
+  - name: narrow
+    speed_cap: 0.8
+    timeout_s: 45
+    steps:
+      # 0.5 m/s: shorter pursuit lookahead, so the follower turns in time for the 6 ft
+      # curve (at 0.8 it under-steered and wedged at the curve entry in 3-D).
+      - behavior: wall_center
+        params: {speed: 0.5}
+        until: [yaw>=75, marker=gravel, terrain=rough]
+        after_distance: 2.0
+      # Wedged in the curve (tight at R ~ 6 ft): plan forward/reverse into the free lane
+      # ahead, then lane-follow on.
+      - behavior: plan_drive
+        params: {goal_from_gap: 1.5, speed: 0.4, goal_tol: 0.3, yaw_tol: 0.5, margin: 1.0}
+        only_if_failed: true
+      - behavior: wall_center
+        params: {speed: 0.6, distance: 3.0}
+        until: [done, marker=gravel, terrain=rough]
+        only_if_failed: true
+
+  # 2" ramp up (32"), 4x8 ft pea gravel (48"), 2" ramp down, flat: ~6 m of walled lane.
+  - name: gravel
+    speed_cap: 0.8
+    timeout_s: 15
+    steps:
+      - behavior: wall_center
+        params: {speed: 0.8, distance: 5.5}
+        until: [done, marker=bank_approach]
+
+  # Entry lane widens toward the 48" x 128" plane; both walls end at the plane edge
+  # (lidar still level here, so this is a geometric anchor).
+  - name: bank_approach
+    speed_cap: 0.8
+    timeout_s: 15
+    steps:
+      - behavior: wall_center
+        params: {speed: 0.6}
+        until: [walls_end<=1.2, terrain=bank]
+        after_distance: 0.8
+
+  # Right U-turn on the 8.5 deg plane (lidar blind while tilted, no walls, 7" drop at
+  # the far edge). The plane's far/side edges are fenced from the fixed plane size
+  # (relative to where the lane walls end) and Hybrid-A* plans a single sweep or a
+  # multi-point turn as the turning radius requires, ending in the return lane.
+  - name: bank_uturn
+    speed_cap: 0.5
+    timeout_s: 40
+    allow_marker_skip: false
+    steps:
+      - behavior: plan_drive
+        params: {goal: $bank_goal, fence: $bank_fence, speed: 0.45, reverse_speed: 0.3,
+                 goal_tol: 0.35, yaw_tol: 0.6, margin: 1.2}
+        until: [done]
+      # Planner gave up: the radius-specific single sweep.
+      - behavior: arc_turn
+        params: {direction: right, turn_deg: 180, radius: $turn_radius, speed: 0.5,
+                 allow_kturn: true}
+        only_if_failed: true
+
+  - name: pothole
+    speed_cap: 0.7
+    timeout_s: 20
+    steps:
+      # ~2 m of return lane to the zone line, 1.5" ramp, 8 ft of holes/bumps, ramp down.
+      - behavior: wall_center
+        params: {speed: 0.7}
+        until: [terrain=rough, distance>=2.8]
+        after_distance: 1.0
+      # Lane end = the south wall ends into the wide area (lidar). Odometry distance
+      # is only a backstop: with VO scale error it fired 2 m early and the left turn
+      # went into the pothole wall.
+      - behavior: wall_center
+        params: {speed: 0.6, distance: 5.0}
+        until: [marker=wide, open_left>=1.5, done]
+
+  # 11x26 ft area with decoy bales. Turn left (south), then search the LEFT
+  # wall for the bucket-zone entrance. Decoy notches fail the depth test.
+  - name: wide
+    speed_cap: 0.9
+    timeout_s: 60
+    steps:
+      - behavior: arc_turn
+        params: {direction: left, turn_deg: 90, radius: 1.6, speed: 0.6, allow_kturn: true}
+        until: [done]
+      # Search = follow the left wall $turn_in_offset out (decoy notches are closed,
+      # so they fail the depth test). On a confirmed opening the onboard Hybrid-A*
+      # (full-lock arcs, forward + reverse, lidar map) plans the entry around decoys;
+      # if it can't, plan_turn_in lines up in the opening's frame and turns in.
+      # min_ahead: the pothole lane mouth sits just behind/abeam after the turn and
+      # read as a left gap (seed 5 drove back into it); the entrance is always ahead.
+      - nav2: {goal: gap, side: left, entry: plan, inside: 0.6, turn_speed: 0.5, min_ahead: 0.3}
+        fallback:
+          behavior: wall_center
+          params: {speed: 0.5, follow: left, wall_target: $turn_in_offset, max_wall: 2.6}
+        until: [done]
+        timeout_s: 45
+
+  # 2-9 buckets; the exit (36") is somewhere on the far wall. Hybrid-A* toward a probe
+  # point inside the field until the exit is confirmed in the far wall, then a plan
+  # through it (24/24 random layouts offline at R 0.91 and 1.22, no collisions).
+  - name: buckets
+    speed_cap: 0.6
+    timeout_s: 60
+    steps:
+      - behavior: plan_drive
+        params: {goal: $field_probe, speed: 0.5, goal_tol: 0.4}
+        until: [exit_seen=0.8, done]
+      - behavior: plan_drive
+        params: {goal: $exit_goal, speed: 0.5}
+        until: [done]
+      # Planner gave up: thread the exit along its axis (reverses first if too close).
+      - gate: {target: $exit_point, beyond: 1.0, commit_speed: 0.4, max_approach_deg: 35,
+               margin: 0.2}
+        only_if_failed: true
+
+  # 72" lane: hoops 96" and 192" from the field exit, anywhere across the lane; then a
+  # right U-turn round a divider with hoop 3 across it (passed heading south), then
+  # west into the car-wash funnel. Each gate: follow the line through its centre,
+  # backing up first if too close to make the sideways shift.
+  - name: hoops
+    speed_cap: 0.8
+    timeout_s: 120
+    allow_marker_skip: false
+    steps:
+      # Hoops are taken in order: the next one must lie 1 m..max_ahead beyond the last
+      # one passed along the lane (lane frame from the bucket exit, re-anchored on each
+      # hoop), cross in the lane direction (yaw_deg) and show two clean lidar legs. No
+      # odometry distances (spacing read 30% short under VO drift). A hoop the depth
+      # image confirms is taken as sensed. `along` = nominal line, for re-anchoring.
+      - gate: {beyond: 0.6, search_forward: 1.0, commit_speed: 0.5, max_approach_deg: 45,
+               expect: {along: 2.44}}
+      - gate: {beyond: 0.6, search_forward: 1.0, commit_speed: 0.5, max_approach_deg: 45,
+               expect: {along: 4.88}}
+      # Ends heading south ~1.7 m right of hoop 2, over the U-turn bowl.
+      - behavior: arc_turn
+        params: {direction: right, turn_deg: 90, radius: 1.3, speed: 0.5, allow_kturn: true}
+      - gate: {beyond: 0.6, search_forward: 0.5, commit_speed: 0.5, max_approach_deg: 45, plan: true,
+               max_angle_deg: 70, max_range: 4.0, expect: {max_ahead: 5.5, yaw_deg: -90}}
+      - behavior: arc_turn
+        params: {direction: right, turn_deg: 90, radius: $turn_radius, speed: 0.5,
+                 allow_kturn: true}
+
+  # 48" lane under ribbons: lidar and camera see ribbons everywhere. Centre in the
+  # funnel until the straight 48" lane, then hold the lane heading (90 deg right of
+  # hoop 3's axis, measured from its legs) through the ribbons; the governor ignores
+  # the front cone. Ends at the 32" finish funnel with clear space beyond.
+  # Overshooting the finish line costs nothing; stopping short does.
+  - name: car_wash
+    speed_cap: 1.5
+    timeout_s: 20
+    steps:
+      - behavior: wall_center
+        params: {speed: 0.7, distance: 4.0}
+        until: [corridor<=1.35, done]
+        after_distance: 0.8
+      - behavior: heading_hold
+        params: {speed: 1.5, heading_abs: $gate_yaw, abs_offset_deg: -90, lateral_offset: 0.0,
+                 ignore_front_deg: 60, distance: 12.0}
+        until: [finish_funnel<=1.6, done]
+        after_distance: 2.0
+
+  - name: finish
+    speed_cap: 1.0
+    allow_marker_skip: false
+    steps:
+      # Centre through the 48" -> 32" funnel and across the line.
+      - behavior: wall_center
+        params: {speed: 0.6, distance: 1.8}
+      # Caught on a funnel wall end: plan forward/reverse into the open lane ahead.
+      - behavior: plan_drive
+        params: {goal_from_gap: 1.5, speed: 0.4, goal_tol: 0.3, yaw_tol: 0.5, margin: 1.0}
+        only_if_failed: true
+      - behavior: wall_center
+        params: {speed: 0.5, distance: 1.5}
+        only_if_failed: true
+      - behavior: stop
+        until: [time>=0.3]

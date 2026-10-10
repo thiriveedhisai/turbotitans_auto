@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>tt_course_sim</name>
+  <version>0.1.0</version>
+  <description>
+    Lightweight 2.5-D simulator of the obstacle course (walls, ramps, helix,
+    bank, gravel, buckets, hoops, ribbons) for testing tt_obstacle_course
+    end to end without hardware or Gazebo.
+  </description>
+  <maintainer email="user@example.com">u_manohs</maintainer>
+  <license>Apache-2.0</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>ackermann_msgs</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-matplotlib</exec_depend>
+  <exec_depend>tt_obstacle_course</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

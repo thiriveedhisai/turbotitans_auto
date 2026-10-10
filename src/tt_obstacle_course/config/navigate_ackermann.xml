@@ -1,0 +1,20 @@
+<!-- Replan at 1 Hz, follow with MPPI. Recovery is clear + back up + wait:
+     no Spin, an Ackermann truck cannot turn in place. -->
+<root BTCPP_format="4" main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <RecoveryNode number_of_retries="4" name="NavigateRecovery">
+      <PipelineSequence name="NavigateWithReplanning">
+        <RateController hz="1.0">
+          <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
+        </RateController>
+        <FollowPath path="{path}" controller_id="FollowPath"/>
+      </PipelineSequence>
+      <Sequence name="Recovery">
+        <ClearEntireCostmap name="ClearLocal" service_name="local_costmap/clear_entirely_local_costmap"/>
+        <ClearEntireCostmap name="ClearGlobal" service_name="global_costmap/clear_entirely_global_costmap"/>
+        <BackUp backup_dist="0.30" backup_speed="0.15"/>
+        <Wait wait_duration="0.5"/>
+      </Sequence>
+    </RecoveryNode>
+  </BehaviorTree>
+</root>

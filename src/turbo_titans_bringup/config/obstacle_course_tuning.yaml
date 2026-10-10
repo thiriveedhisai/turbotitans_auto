@@ -1,0 +1,230 @@
+# Obstacle-course tuning. SI units (m, s, rad, m/s) unless the name says otherwise.
+# MEASURE = placeholder, replace with a real measurement before trusting it.
+# Planned node names; not wired to code yet. Layer this file last in the launch so it wins.
+
+/**:
+  ros__parameters:
+    vehicle:
+      wheelbase: 0.32                  # MEASURE (axle to axle)
+      width: 0.20
+      length: 0.50
+      height: 0.25
+      ground_clearance: 0.076
+      lidar_height: 0.25               # standard 5 gal bucket ~0.37 tall, so buckets are seen
+      # Sliding makes fast turns tighter but unrepeatable; plan with the slow value.
+      turn_radius_at_speed_mps: [0.5, 1.0, 2.0]
+      turn_radius_m: [1.52, 1.52, 1.22]           # re-measure after servo power fix
+      planning_min_turn_radius: 1.52
+
+# ------------------------------------------------ real-world speed/steer calibration
+rc_car_controller:
+  ros__parameters:
+    # PCA9685 internal oscillator is often 26-27 MHz, not 25; skews every pulse.
+    pca_osc_clock_hz: 25000000
+    speed_map_mode: "table"            # "linear" = old behaviour (max_speed -> full throttle)
+    # Commanded m/s -> ESC pulse. Fill from a calibration run using ZED odometry speed.
+    fwd_speed_mps: [0.0, 0.3, 0.6, 1.0, 1.5, 2.0, 3.0]
+    fwd_pulse_us: [1500, 1565, 1590, 1615, 1650, 1690, 1770]
+    rev_speed_mps: [0.0, -0.3, -0.6, -1.0]
+    rev_pulse_us: [1500, 1435, 1410, 1380]
+    esc_deadband_us: 40
+    # Most hobby ESCs treat the first reverse pulse as a brake.
+    esc_reverse_mode: "double_tap"     # "direct" | "double_tap"
+    esc_reverse_brake_ms: 120
+    esc_reverse_neutral_ms: 120
+    speed_scale: 1.0                   # quick global fudge: real/commanded mismatch
+    # Closed-loop speed on ZED velocity; essential on the 20% ramp and 11% helix descent.
+    speed_feedback_enabled: true
+    speed_feedback_topic: "/zed/zed_node/odom"
+    speed_kp_us_per_mps: 40.0
+    speed_ki_us_per_m: 25.0
+    speed_i_limit_us: 80
+    # Steering angle -> servo pulse; asymmetric linkages need asymmetric tables.
+    steer_angle_rad: [-0.5, -0.25, 0.0, 0.25, 0.5]
+    steer_pulse_us: [1000, 1250, 1500, 1750, 2000]
+    steer_trim_us: 0
+    command_timeout: 0.5
+
+# ------------------------------------------------ final arbitration + safety
+speed_governor:
+  ros__parameters:
+    global_speed_scale: 1.0            # scales every zone cap at once
+    max_speed: 2.5
+    max_reverse_speed: 0.6
+    max_accel: 1.5
+    max_decel: 3.0
+    max_lateral_accel: 2.5             # rollover guard: v <= sqrt(a_lat * R)
+    steer_rate_limit: 3.0
+    front_half_angle_deg: 35.0
+    slow_distance: 0.8
+    stop_distance: 0.30
+    rear_stop_distance: 0.25           # used while reversing
+    ttc_brake_s: 0.6
+
+# ------------------------------------------------ perception
+start_detector:
+  ros__parameters:
+    hsv_lower: [40, 80, 60]
+    hsv_upper: [85, 255, 255]
+    min_area_px: 400
+    min_circularity: 0.6
+    depth_min: 0.3
+    depth_max: 4.0
+    confirm_frames: 6
+    require_transition: true           # must see not-green -> green, not a static green
+
+marker_detector:
+  ros__parameters:
+    family: "tag36h11"
+    tag_size: 0.20                     # MEASURE printed black-square edge
+    max_range: 6.0
+    min_decision_margin: 40.0
+    # Parallel arrays: tag id -> zone name.
+    tag_ids: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    tag_zones: ["start", "ramp_up", "tunnel", "narrow", "gravel", "bank",
+                "pothole", "wide", "buckets", "hoops", "car_wash"]
+
+terrain_monitor:
+  ros__parameters:
+    imu_topic: "/zed/zed_node/imu/data"
+    vibration_window_s: 0.3
+    vibration_highpass_hz: 5.0
+    vibration_rms_levels: [1.0, 2.5, 4.0]     # m/s^2
+    vibration_speed_caps: [1.5, 0.9, 0.5]
+    ramp_pitch_enter_deg: 4.0
+    ramp_pitch_exit_deg: 2.0
+    bank_roll_enter_deg: 5.0
+    tip_roll_warn_deg: 15.0
+    tip_roll_abort_deg: 22.0
+    tip_pitch_abort_deg: 25.0
+    lidar_gate_tilt_deg: 4.0           # above this, 2D scan hits floor/sky: ignore for walls
+
+obstacle_perception:
+  ros__parameters:
+    scan_range_min: 0.15
+    scan_range_max: 8.0
+    temporal_filter_frames: 3          # ribbons flicker, walls persist
+    depth_roi_max: 3.0
+    dropoff_height: 0.05               # ground this far below plane = edge (bridge/helix/bank)
+    min_gap_width_margin: 0.25         # opening must be vehicle.width + this
+    min_gap_depth_beyond: 1.5          # range past the wall line; rejects closed notches
+    hoop_post_spacing_tol: 0.18
+
+# ------------------------------------------------ behaviors
+behaviors:
+  ros__parameters:
+    wall_center:
+      kp: 1.2
+      kd: 0.15
+      lookahead: 0.8
+    gap_follow:
+      bubble_radius: 0.30
+      max_range: 3.0
+      goal_heading_gain: 0.4
+    heading_hold:
+      kp: 2.0
+      kd: 0.1
+    arc_turn:
+      yaw_rate_kp: 0.8
+      edge_correction_gain: 0.5
+    k_turn:
+      front_clearance: 0.35
+      rear_clearance: 0.30
+      leg_max_distance: 0.6
+      leg_speed: 0.4
+      heading_tolerance_deg: 10.0
+      max_legs: 8
+    gate_pass:
+      approach_distance: 1.2
+      commit_distance: 0.6             # last stretch driven blind and straight
+      max_lateral_error: 0.08
+      max_heading_error_deg: 8.0
+    stuck:
+      min_speed: 0.05
+      time_s: 1.5
+      backoff_distance: 0.3
+      max_retries: 3
+
+# ------------------------------------------------ mission (course order)
+mission_manager:
+  ros__parameters:
+    zone_order: ["start", "ramp_up", "bridge", "helix", "tunnel", "narrow_straight",
+                 "narrow_curve", "gravel", "bank", "pothole", "wide", "buckets",
+                 "hoops", "car_wash", "finish"]
+    zones:
+      start:           {behavior: "wall_center",  speed_cap: 2.0, timeout_s: 10.0}
+      ramp_up:         {behavior: "heading_hold", speed_cap: 1.0, timeout_s: 8.0}
+      bridge:          {behavior: "edge_follow",  speed_cap: 0.6, timeout_s: 8.0}
+      # 270 deg left, lane 0.69-1.75 m radius; aim outer half.
+      # Usable path radius 0.87-1.57 m for a 0.20 m wide truck; aim outer half.
+      # edge_source falls back to depth drop-off if rails (~0.15 m) aren't there.
+      helix:           {behavior: "arc_turn", speed_cap: 0.6, timeout_s: 25.0,
+                        radius: 1.30, turn_deg: 270.0, direction: "left",
+                        edge_source: "rail_then_dropoff", outer_edge_target: 0.30}
+      tunnel:          {behavior: "wall_center",  speed_cap: 1.2, timeout_s: 10.0}
+      narrow_straight: {behavior: "wall_center",  speed_cap: 0.8, timeout_s: 10.0}
+      narrow_curve:    {behavior: "wall_center",  speed_cap: 0.6, timeout_s: 15.0}
+      gravel:          {behavior: "heading_hold", speed_cap: 0.9, timeout_s: 12.0,
+                        max_steer: 0.15}
+      # 180 deg right around the post; k_turn fallback if radius too large.
+      bank:            {behavior: "arc_turn", speed_cap: 0.7, timeout_s: 25.0,
+                        radius: 1.30, turn_deg: 180.0, direction: "right"}
+      pothole:         {behavior: "heading_hold", speed_cap: 0.7, timeout_s: 12.0}
+      # Search the left (east) wall heading south; the bucket entrance gap moves along it.
+      wide:            {behavior: "nav2", speed_cap: 1.0, timeout_s: 45.0,
+                        search_side: "left", search_lane_offset: 0.8,
+                        search_step: 1.0, expected_gap_from_entry: 6.5}
+      buckets:         {behavior: "nav2", speed_cap: 0.8, timeout_s: 60.0}
+      hoops:           {behavior: "nav2_gates", speed_cap: 0.8, timeout_s: 90.0}
+      car_wash:        {behavior: "heading_hold", speed_cap: 1.8, timeout_s: 10.0,
+                        ignore_front_deg: 60.0}
+      finish:          {behavior: "stop", speed_cap: 0.0, timeout_s: 0.0}
+
+# ------------------------------------------------ Nav2 overrides (layer over full nav2 params)
+planner_server:
+  ros__parameters:
+    GridBased:
+      plugin: "nav2_smac_planner::SmacPlannerHybrid"
+      motion_model_for_search: "REEDS_SHEPP"    # allows reverse segments
+      minimum_turning_radius: 1.52
+      reverse_penalty: 1.3
+      change_penalty: 0.2                       # cost per forward/reverse switch
+      non_straight_penalty: 1.2
+      angle_quantization_bins: 72
+      max_planning_time: 1.5
+
+controller_server:
+  ros__parameters:
+    controller_frequency: 20.0
+    FollowPath:
+      plugin: "nav2_mppi_controller::MPPIController"
+      motion_model: "Ackermann"
+      AckermannConstraints:
+        min_turning_r: 1.52
+      vx_max: 0.8
+      vx_min: -0.4
+      wz_max: 0.6
+      batch_size: 1000                          # lower if Orin Nano can't hold 20 Hz
+      time_steps: 56
+      model_dt: 0.05
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      global_frame: "odom"
+      rolling_window: true
+      width: 4
+      height: 4
+      resolution: 0.05
+      inflation_layer:
+        inflation_radius: 0.35
+        cost_scaling_factor: 4.0
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      global_frame: "odom"                      # no prior map: rolling, odom-anchored
+      rolling_window: true
+      width: 14
+      height: 14
+      resolution: 0.05

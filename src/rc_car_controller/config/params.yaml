@@ -1,0 +1,50 @@
+/**:
+  ros__parameters:
+    # --- I2C / PCA9685 ---
+    i2c_bus: 7
+    i2c_address: 0x40
+    pwm_freq_hz: 50.0
+    servo_channel: 0
+    motor_channel: 3
+
+    # --- OE pin: Jetson Nano 40-pin header GPIO09 == BOARD pin 7 ---
+    oe_gpio_mode: "BOARD"
+    oe_gpio_pin: 7
+
+    # --- Steering servo (microseconds) ---
+    servo_center_us: 1500      # 90 deg / straight
+    servo_min_us: 1000
+    servo_max_us: 2000
+    max_steering_angle: 0.5    # rad that maps to full servo travel
+    steering_direction: 1      # set to -1 to reverse steering
+
+    # --- Motor ESC (microseconds) ---
+    motor_neutral_us: 1500     # stop
+    motor_min_us: 1000         # full reverse
+    motor_max_us: 2000         # full forward
+    max_speed: 2.0             # m/s that maps to full throttle
+    motor_direction: 1         # set to -1 to reverse drive
+
+    # --- I/O ---
+    input_topic: "ackermann_cmd"
+    command_timeout: 0.5       # s; no command -> neutral failsafe
+
+    # --- Calibration (these defaults reproduce the original behaviour) ---
+    pca_osc_clock_hz: 25000000
+    steer_trim_us: 0
+    speed_map_mode: "linear"   # "table" uses fwd/rev tables below
+    fwd_speed_mps: [0.0, 2.0]
+    fwd_pulse_us: [1500.0, 2000.0]
+    rev_speed_mps: [0.0, -2.0]
+    rev_pulse_us: [1500.0, 1000.0]
+    esc_deadband_us: 0
+    esc_reverse_mode: "direct" # "double_tap" for ESCs that brake on first reverse
+    esc_reverse_brake_ms: 120
+    esc_reverse_neutral_ms: 120
+    speed_scale: 1.0
+    speed_feedback_enabled: false
+    speed_feedback_topic: "/zed/zed_node/odom"
+    speed_kp_us_per_mps: 40.0
+    speed_ki_us_per_m: 25.0
+    speed_i_limit_us: 80.0
+    speed_correction_limit_us: 150.0

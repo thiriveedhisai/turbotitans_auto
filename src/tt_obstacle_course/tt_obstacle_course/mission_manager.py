@@ -667,12 +667,20 @@ class MissionManager(TTNode):
             self.get_logger().warn(f'nav2 {what} failed')
             run.failed = True
 
-    def fresh_gap(self, run, side, min_ahead):
+    def fresh_gap(self, run, side, min_ahead, min_from_start=None):
         gap = self.gaps.get(side)
         if gap is None or gap[1] < run.t0 or self.now_s() - gap[1] > 1.0:
             return None
         gx, gy, _ = gap[0]
-        return gap[0] if self.odom.to_robot(gx, gy)[0] > min_ahead else None
+        if self.odom.to_robot(gx, gy)[0] <= min_ahead:
+            return None
+        if min_from_start is not None:
+            # Ahead of where the search began, not of a wandering heading (seed 5 turned
+            # east while wall-following and took the pothole lane mouth for the entrance).
+            sx, sy, syaw = run.pose0
+            if math.cos(syaw) * (gx - sx) + math.sin(syaw) * (gy - sy) < min_from_start:
+                return None
+        return gap[0]
 
     def update_gap_fallback(self, run):
         # Without Nav2: wall-follow until a real opening is seen, then turn in.
@@ -771,7 +779,9 @@ class MissionManager(TTNode):
                     self.next_in_queue(run)
                 return
             if run.phase in (None, 'search'):
-                gap = self.fresh_gap(run, side, float(nav.get('min_ahead', -1.0)))
+                mfs = nav.get('min_from_start')
+                gap = self.fresh_gap(run, side, float(nav.get('min_ahead', -1.0)),
+                                     None if mfs is None else float(mfs))
                 if gap is not None:
                     gx, gy, gyaw = gap
                     self.get_logger().info(f'{side} gap found at ({gx:.2f}, {gy:.2f})')
@@ -836,12 +846,15 @@ class MissionManager(TTNode):
         expect = spec.get('expect')
         if expect is not None and self.lane_origin is not None:
             ox, oy, oyaw = self.lane_origin
+            # Hoops stand square to their lane: a pair whose axis disagrees is a mis-pairing
+            # (one leg + a stray return, seen obliquely), whose centre is off as well.
+            lay = self.square(wrap_angle(oyaw + math.radians(float(expect.get('yaw_deg', 0.0)))))
+            if abs(wrap_angle(gyaw - lay)) > math.radians(float(expect.get('axis_tol_deg', 20.0))):
+                return self.reject(f'axis {math.degrees(wrap_angle(gyaw - lay)):.0f} deg vs lane')
             # A hoop the depth image confirmed is taken as sensed: only its crossing
             # direction is checked, not where odometry says it should be.
             if self.gate_confirmed:
-                if abs(wrap_angle(gyaw - oyaw - math.radians(float(expect.get('yaw_deg', 0.0))))) > 0.6:
-                    return None
-                return gx, gy, gyaw
+                return gx, gy, lay
             c, s = math.cos(oyaw), math.sin(oyaw)
             along, lat = c * (gx - ox) + s * (gy - oy), -s * (gx - ox) + c * (gy - oy)
             tol = float(expect.get('tol', 0.4))
@@ -853,9 +866,7 @@ class MissionManager(TTNode):
                 return self.reject(f'{ahead:.2f} m past the last hoop')
             if 'lat' in expect and abs(lat - float(expect['lat'])) > tol:
                 return self.reject(f'lat {lat:.2f}')
-            if abs(wrap_angle(gyaw - oyaw - math.radians(float(expect.get('yaw_deg', 0.0))))) > 0.5:
-                return self.reject('axis vs lane')
-            return gx, gy, gyaw
+            return gx, gy, lay
         # A hoop in a 72" lane can't be far off the lane line (rejects bucket/corner pairs).
         lane = run.pose0[2]
         off = -math.sin(lane) * (gx - self.odom.x) + math.cos(lane) * (gy - self.odom.y)
@@ -905,6 +916,12 @@ class MissionManager(TTNode):
                             f'{math.degrees(lane_yaw):.0f} deg; using layout')
                         gate_yaw = self.square(lane_yaw)
                     self.variables['gate_yaw'] = gate_yaw
+                    ex = spec.get('exit_goal')
+                    if ex:
+                        tx, ty = run.target[:2]
+                        self.variables[ex.get('name', 'gate_exit')] = list(self.relative(
+                            (tx, ty, gate_yaw), float(ex.get('forward', 0.0)),
+                            float(ex.get('left', 0.0)), float(ex.get('yaw_deg', 0.0))))
                     self.reanchor_lane(spec.get('expect'), run.target)
                     run.done = True
                 return
@@ -913,7 +930,7 @@ class MissionManager(TTNode):
             fresh = self.next_gate(run, spec) if not run.queue and 'target' not in spec else None
             if fresh is not None and run.target is not None and now - run.t_reaim > 0.5:
                 moved = math.hypot(fresh[0] - run.target[0], fresh[1] - run.target[1])
-                if 0.08 < moved < 0.5:
+                if 0.08 < moved < 0.8:
                     gx, gy, gyaw = fresh
                     run.target = fresh
                     run.t_reaim = now

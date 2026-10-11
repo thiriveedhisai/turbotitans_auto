@@ -104,6 +104,25 @@ class Footprint:
         return [x + o * c for o in self.offsets], [y + o * s for o in self.offsets]
 
 
+def free_goal(goal, grid, footprint, shifts=(0.1, 0.2, 0.3)):
+    """The goal, or the nearest pose shifted across/along its axis that is clear (an
+    exit point seen ~0.3 m off put the goal inside a 36\" connector's inflated wall)."""
+    def clear(x, y, yaw):
+        c, s = math.cos(yaw), math.sin(yaw)
+        return not any(grid.hit(x + o * c, y + o * s) for o in footprint.offsets)
+
+    gx, gy, gyaw = goal
+    if clear(gx, gy, gyaw):
+        return goal
+    c, s = math.cos(gyaw), math.sin(gyaw)
+    for d in shifts:
+        for lat, lon in ((d, 0.0), (-d, 0.0), (0.0, d), (0.0, -d)):
+            x, y = gx - s * lat + c * lon, gy + c * lat + s * lon
+            if clear(x, y, gyaw):
+                return (x, y, gyaw)
+    return None
+
+
 def plan(start, goal, grid, footprint, radius, step=0.3, xy_res=0.15, yaw_bins=36,
          tol_xy=0.25, tol_yaw=0.35, reverse_cost=1.6, switch_cost=1.0, turn_cost=0.05,
          max_iter=40000, allow_reverse=True):

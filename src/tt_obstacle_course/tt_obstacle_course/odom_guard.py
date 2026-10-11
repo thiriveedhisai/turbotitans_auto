@@ -69,6 +69,8 @@ class OdomGuard(TTNode):
         self.gyro_yaw = 0.0
         self.gyro_used = 0.0
         self.imu_t = None
+        self.gyro_hist = collections.deque()
+        self.raw_gyro = 0.0
         self.imu_rp = (0.0, 0.0)
         self.scans = collections.deque()
         self.scan_moving = False
@@ -89,6 +91,7 @@ class OdomGuard(TTNode):
         self.create_subscription(LaserScan, self.param('scan_topic', '/scan'), self.on_scan,
                                  qos_profile_sensor_data)
         self.tag_gain = float(g('tag_heading_gain', 0.04))
+        self.tag_tol = math.radians(float(g('tag_heading_tol_deg', 15.0)))
         self.tag_range = float(g('tag_heading_max_range', 2.5))
         self.create_subscription(String, '/marker/detections', self.on_tags, 10)
         self.create_timer(1.0 / 30.0, self.tick)
@@ -101,6 +104,11 @@ class OdomGuard(TTNode):
         t = self.now_s()
         self.raw_speed = msg.twist.twist.linear.x
         self.raw = (t, p.x, p.y, p.z, roll, pitch, yaw)
+        # Gyro heading at the pose's own stamp: the pose is a frame behind; at the
+        # 55 deg/s turn into the car wash that lag froze 7 deg into the dead-reckoning.
+        stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+        self.raw_gyro = next((g for ts, g in reversed(self.gyro_hist) if ts <= stamp),
+                             self.gyro_yaw)
         self.raw_t = t
         self.raw_hist.append((t, p.x, p.y))
         while self.raw_hist and t - self.raw_hist[0][0] > 2.0:
@@ -119,6 +127,9 @@ class OdomGuard(TTNode):
         if self.imu_t is not None and 0.0 < t - self.imu_t < 0.5:
             self.gyro_yaw += self.gyro_z * (t - self.imu_t)
         self.imu_t = t
+        self.gyro_hist.append((t, self.gyro_yaw))
+        while len(self.gyro_hist) > 100:
+            self.gyro_hist.popleft()
 
     def on_cmd(self, msg):
         moving = abs(msg.speed) >= self.cmd_min
@@ -208,7 +219,7 @@ class OdomGuard(TTNode):
                 continue
             face = wrap_angle(self.fused[5] + math.radians(d['normal_deg']))
             err = math.remainder(self.grid - face, math.pi / 2)
-            if abs(err) > self.wall_tol:
+            if abs(err) > self.tag_tol:
                 continue
             self.fused[5] = wrap_angle(self.fused[5] + self.tag_gain * err)
             if not self.degraded and self.raw is not None:
@@ -222,17 +233,21 @@ class OdomGuard(TTNode):
         old = next(((tt, xx, yy) for tt, xx, yy in self.raw_hist if t - tt <= window), self.raw_hist[0])
         return math.hypot(x - old[1], y - old[2])
 
+    def raw_yaw(self):
+        return self.raw[6] + (self.gyro_yaw - self.raw_gyro)
+
     def apply_offset(self):
         ox, oy, oyaw = self.offset
-        _, x, y, z, roll, pitch, yaw = self.raw
+        _, x, y, z, roll, pitch, _ = self.raw
         c, s = math.cos(oyaw), math.sin(oyaw)
-        self.fused = [ox + c * x - s * y, oy + s * x + c * y, z, roll, pitch, wrap_angle(yaw + oyaw)]
+        self.fused = [ox + c * x - s * y, oy + s * x + c * y, z, roll, pitch,
+                      wrap_angle(self.raw_yaw() + oyaw)]
 
     def reanchor(self):
         """Choose the offset so that offset o raw == current fused pose."""
-        _, x, y, _, _, _, yaw = self.raw
+        _, x, y, _, _, _, _ = self.raw
         fx, fy, _, _, _, fyaw = self.fused
-        oyaw = wrap_angle(fyaw - yaw)
+        oyaw = wrap_angle(fyaw - self.raw_yaw())
         c, s = math.cos(oyaw), math.sin(oyaw)
         self.offset = (fx - (c * x - s * y), fy - (s * x + c * y), oyaw)
 
@@ -260,7 +275,7 @@ class OdomGuard(TTNode):
             if not stale and self.raw_moved(0.3) > self.resume_m:
                 # VIO heading runs on through a visual dropout (IMU): resume on it unless it
                 # jumped (relocalisation), so dead-reckoned yaw error isn't locked in.
-                vio_yaw = wrap_angle(self.raw[6] + self.offset[2])
+                vio_yaw = wrap_angle(self.raw_yaw() + self.offset[2])
                 if abs(wrap_angle(vio_yaw - self.fused[5])) < math.radians(20.0):
                     self.fused[5] = vio_yaw
                 self.reanchor()

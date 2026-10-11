@@ -81,9 +81,12 @@ odom_guard:
     scan_compare_s: 0.5
     scan_change_m: 0.04                # a beam 'changed' if its range moved this much
     scan_moving_fraction: 0.03         # moving 0.2 m changes 6-20% of beams (even a straight tunnel), still <1%
-    wall_heading_tol_deg: 8.0          # straight parallel lane walls within this of the course grid correct yaw
+    # Lanes run on a 90 deg grid, so straight parallel walls fix the heading unambiguously
+    # up to 45 deg; at 8 deg, VO+gyro drift (~0.15 deg/s) escaped it by 40 s and reached 37.
+    wall_heading_tol_deg: 25.0
     wall_heading_gain: 0.08            # per scan (10 Hz): ~1 s time constant
     tag_heading_gain: 0.04             # AprilTags hang flat on course walls: their normal is on the grid too
+    tag_heading_tol_deg: 15.0          # oblique tag normals were up to 13 deg off
     tag_heading_max_range: 2.5
 
 # ------------------------------------------------ perception

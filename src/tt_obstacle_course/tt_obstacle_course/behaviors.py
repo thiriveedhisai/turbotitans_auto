@@ -15,6 +15,7 @@ DEG = math.pi / 180.0
 RUNNING = 'running'
 DONE = 'done'
 FAILED = 'failed'
+CLIMB = ('ramp_up', 'bank')         # terrain states where a stall needs momentum, not caution
 
 
 @dataclass
@@ -181,7 +182,14 @@ class HeadingHold(Behavior):
         if 'line_point' in self.p:
             # Threading a hoop: never steer the swept arc into a leg.
             kappa = self.clear_kappa(ctx, kappa, need=0.4, any_side=True)
-        return Command(float(self.p.get('speed', 0.5)), self.steer_for(kappa), status)
+        speed = float(self.p.get('speed', 0.5))
+        # Turning onto the heading: full speed only once roughly lined up (the car-wash
+        # sprint started 60 deg off line at 1.5 m/s and hit the lane wall). Measured
+        # against the base heading: a lateral-offset tilt must not slow a ramp climb.
+        slow = min(speed, float(self.p.get('turn_speed', 0.4)))
+        off = abs(wrap_angle(self.target - ctx.odom.yaw))
+        f = min(1.0, max(0.0, (off - 25 * DEG) / (30 * DEG)))
+        return Command(speed - (speed - slow) * f, self.steer_for(kappa), status)
 
 
 class WallCenter(Behavior):
@@ -533,12 +541,14 @@ class PlanDrive(Behavior):
         return self.map.inflated(min(xs) - m, min(ys) - m, max(xs) + m, max(ys) + m, self.fp.radius)
 
     def replan(self, ctx, rear):
-        from tt_obstacle_course.planner import Footprint, plan
+        from tt_obstacle_course.planner import Footprint, free_goal, plan
         self.t_plan = ctx.t
         # Plan a little wider than full lock so the tracker keeps steering authority.
         radius = self.cfg.steering.min_turn_radius * float(self.p.get('radius_factor', 1.1))
         reverse = bool(self.p.get('allow_reverse', True))
-        self.path = plan(rear, self.goal, self.grid(rear), self.fp, radius, allow_reverse=reverse)
+        grid = self.grid(rear)
+        goal = free_goal(self.goal, grid, self.fp) or self.goal
+        self.path = plan(rear, goal, grid, self.fp, radius, allow_reverse=reverse)
         if self.path is None:
             # Already inside the safety margin (e.g. nose at a wall end): retry with the
             # bare body so the search can back out.
@@ -547,7 +557,8 @@ class PlanDrive(Behavior):
             m = float(self.p.get('margin', 1.5))
             xs, ys = (rear[0], self.goal[0]), (rear[1], self.goal[1])
             grid = self.map.inflated(min(xs) - m, min(ys) - m, max(xs) + m, max(ys) + m, tight.radius)
-            self.path = plan(rear, self.goal, grid, tight, radius, allow_reverse=reverse)
+            goal = free_goal(self.goal, grid, tight) or self.goal
+            self.path = plan(rear, goal, grid, tight, radius, allow_reverse=reverse)
         self.i = 0
         if self.path is None and self.candidates:
             # Unreachable recovery goal: try the next candidate straight away.
@@ -736,13 +747,17 @@ class StuckMonitor:
         # Reverse with opposite lock: the nose swings toward where it was steering.
         steer = -cfg.steering.full_lock(cmd.steer) if abs(cmd.steer) > 0.05 else 0.0
         dist = self.backoff_distance * (1.0 + 0.5 * (self.retries - 1))
+        if ctx.terrain in CLIMB:
+            dist += 0.4                     # run-up for the next attempt
         self.backoff = BackOff({'distance': dist, 'steer': steer}, cfg)
         self.backoff.start(ctx)
         return True
 
     def limit(self, ctx, cmd):
-        """Retry slowly: cap forward speed for a stretch after a backoff."""
-        if cmd.speed > self.slow_speed and ctx.odom.distance < self.slow_until:
+        """Retry slowly: cap forward speed for a stretch after a backoff. Not on a climb:
+        a stall at the ramp crest (low friction) needs momentum, 0.25 m/s never got over."""
+        if (cmd.speed > self.slow_speed and ctx.odom.distance < self.slow_until
+                and ctx.terrain not in CLIMB):
             cmd.speed = self.slow_speed
         return cmd
 

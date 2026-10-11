@@ -212,7 +212,7 @@ class ScanView:
     # ------------------------------------------------------------------ gates
     def find_gates(self, gate_width, tol, post_max_extent=0.15,
                    cluster_gap=0.10, max_range=3.5, half_fov=70 * DEG, isolation=0.25,
-                   max_yaw=60 * DEG):
+                   max_yaw=60 * DEG, post_jump=0.04):
         """Pairs of thin, free-standing posts ``gate_width`` apart in front (hoop legs),
         open between them and passable roughly forward (|yaw| <= max_yaw).
 
@@ -235,19 +235,35 @@ class ScanView:
                 if extent <= post_max_extent:
                     clusters.append((float(cx.mean()), float(cy.mean())))
                 start = k
+        # A leg a few cm in front of a wall (hoop 3 vs the U-turn bale wall) is closer
+        # than cluster_gap and merges into it; find it as a short run stepping out of the
+        # wall on both sides (a convex wall corner has no step either side).
+        dips = []
+        for s, e in _range_dips(r, post_jump):
+            cx, cy = xs[s:e + 1], ys[s:e + 1]
+            if math.hypot(cx[-1] - cx[0], cy[-1] - cy[0]) <= post_max_extent:
+                dips.append((float(cx.mean()), float(cy.mean())))
         # Sparse returns from a wall seen at a grazing angle look like posts: drop
         # anything lying on a fitted side wall. Only near-parallel fits are walls; a steep
         # fit (e.g. across a U-turn bowl) is usually threaded through the legs themselves.
+        # Dips already stand out of the wall, so they are kept.
         walls = [w for w in self.lane_walls(max_half_width=1.2, x_max=max_range).values()
                  if w and abs(w[1]) <= 0.6]
         clusters = [(px, py) for px, py in clusters
                     if all(abs(py - (w[0] + w[1] * px + w[3] * px * px)) > 0.1 for w in walls)]
+        clusters += [p for p in dips
+                     if all(math.hypot(p[0] - q[0], p[1] - q[1]) > 0.05 for q in clusters)]
 
         def isolated(p, partner):
             d_p = np.hypot(allx - p[0], ally - p[1])
             d_q = np.hypot(allx - partner[0], ally - partner[1])
             near = (d_p > post_max_extent / 2 + 0.03) & (d_p < isolation) & (d_q > 0.08)
-            return not near.any()
+            # A wall just outside the outer leg (hoop 3 sits ~0.17 m off the U-turn wall)
+            # is beyond the leg, away from its partner; corners/bale ends are not.
+            ux, uy = p[0] - partner[0], p[1] - partner[1]
+            norm = math.hypot(ux, uy) or 1.0
+            outward = ((allx - p[0]) * ux + (ally - p[1]) * uy) / norm > 0.04
+            return not (near & ~outward).any()
 
         gates = []
         for i in range(len(clusters)):
@@ -349,6 +365,21 @@ def scan_shift(prev, cur, dyaw=0.0, max_shift=0.6, step=0.01, tol=0.03, max_rang
     if not far.any() or scores[best] < 15 or scores[best] < 1.25 * scores[far].max():
         return None
     return float(shifts[best])
+
+
+def _range_dips(r, jump, max_len=6):
+    """(start, end) index runs at least `jump` nearer than the beams on both sides."""
+    out = []
+    n = r.size
+    for s in range(1, n - 1):
+        if not r[s - 1] - r[s] > jump:
+            continue
+        for e in range(s, min(n - 1, s + max_len)):
+            if r[e + 1] - r[e] > jump:
+                if r[s:e + 1].max() - r[s:e + 1].min() < jump:
+                    out.append((s, e))
+                break
+    return out
 
 
 def _openings(a, r, dist, min_width, depth_beyond):

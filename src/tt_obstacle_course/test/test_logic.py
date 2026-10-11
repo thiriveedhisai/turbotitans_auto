@@ -291,6 +291,37 @@ def test_gate_detection_from_two_posts():
     assert gates[0]['yaw'] == pytest.approx(0.0, abs=0.1)
 
 
+def _post(cx, cy, r=0.02):
+    return [((cx - r, cy - r), (cx + r, cy - r)), ((cx + r, cy - r), (cx + r, cy + r)),
+            ((cx + r, cy + r), (cx - r, cy + r)), ((cx - r, cy + r), (cx - r, cy - r))]
+
+
+def test_gate_with_outer_leg_close_to_wall():
+    # Hoop 3: outer leg ~0.17 m inside the U-turn wall, which runs past it.
+    wall = [((0.5, 0.49), (3.0, 0.49))]
+    scan = raycast(_post(1.5, 0.3) + _post(1.5, -0.3) + wall, 0.0, 0.0, 0.0, n=720)
+    gates = scan.find_gates(gate_width=0.6, tol=0.1, isolation=0.12)
+    assert gates
+    assert gates[0]['y'] == pytest.approx(0.0, abs=0.05)
+
+
+def test_gate_with_leg_merged_into_thick_wall():
+    # Gazebo geometry: 0.12 m bale wall whose face is 0.05 m beyond the leg's edge,
+    # closer than cluster_gap, so the leg only shows as a step out of the wall.
+    wall = [((-1.0, 0.375), (3.0, 0.375)), ((-1.0, 0.495), (3.0, 0.495))]
+    scan = raycast(_post(1.5, 0.3, 0.025) + _post(1.5, -0.33, 0.025) + wall, 0.0, 0.0, 0.0, n=360)
+    gates = scan.find_gates(gate_width=0.635, tol=0.18, isolation=0.12)
+    assert gates
+    assert gates[0]['y'] == pytest.approx(-0.015, abs=0.06)
+
+
+def test_gate_not_formed_from_doorway_in_wall():
+    # Two wall ends 0.6 m apart (a doorway) are not hoop legs.
+    walls = [((1.5, 0.3), (1.5, 2.0)), ((1.5, -0.3), (1.5, -2.0))]
+    scan = raycast(walls, 0.0, 0.0, 0.0, n=720)
+    assert scan.find_gates(gate_width=0.6, tol=0.1, isolation=0.12) == []
+
+
 def _box_map(segments):
     from tt_obstacle_course.planner import ObstacleMap
     m = ObstacleMap()
@@ -300,6 +331,18 @@ def _box_map(segments):
             m.cells.add((int(math.floor((x1 + t * (x2 - x1)) / m.res)),
                          int(math.floor((y1 + t * (y2 - y1)) / m.res))))
     return m
+
+
+def test_blocked_goal_nudged_into_connector():
+    from tt_obstacle_course.planner import Footprint, free_goal
+    # 0.91 m connector along x between walls at y=0 and y=0.91; goal seen 0.25 m off-centre.
+    m = _box_map([((0, 0), (3, 0)), ((0, 0.91), (3, 0.91))])
+    fp = Footprint(rear=0.1, front=0.45, half_width=0.13, margin=0.05)
+    grid = m.inflated(-1, -1, 4, 2, fp.radius)
+    goal = (1.5, 0.2, 0.0)
+    assert free_goal((1.5, 0.455, 0.0), grid, fp) == (1.5, 0.455, 0.0)
+    nudged = free_goal(goal, grid, fp)
+    assert nudged is not None and 0.3 <= nudged[1] <= 0.61
 
 
 def test_planner_threads_a_narrow_exit_and_respects_turning_radius():

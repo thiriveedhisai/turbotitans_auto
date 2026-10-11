@@ -356,17 +356,20 @@ class Course:
                   base=W)
         self.wall([(ux, uy - ur), (5.0, -0.61), (0.85, -0.61), (0.0, -0.405)], base=W)
         self.hoops = []
+        self.hoop_legs = []
         for hx in (lane_x0 + 2.438, lane_x0 + 4.876):
             w = 0.635 if self.seed == 0 else float(rng.uniform(0.51, 0.76))
             hy = float(rng.uniform(hoop_y0 + w / 2 + 0.1, hoop_y1 - w / 2 - 0.1))
             self.disc(hx, hy + w / 2, 0.025, 0.9, 'hoop', base=W)
             self.disc(hx, hy - w / 2, 0.025, 0.9, 'hoop', base=W)
             self.hoops.append((hx, hy))
+            self.hoop_legs.append(((hx, hy - w / 2), (hx, hy + w / 2)))
         w = 0.635 if self.seed == 0 else float(rng.uniform(0.51, 0.76))
         x3 = float(rng.uniform(tip[0] + 0.25 + w / 2, ux + ur - w / 2 - 0.15))
         self.disc(x3 - w / 2, tip[1], 0.025, 0.9, 'hoop', base=W)
         self.disc(x3 + w / 2, tip[1], 0.025, 0.9, 'hoop', base=W)
         self.hoops.append((x3, tip[1]))
+        self.hoop_legs.append(((x3 - w / 2, tip[1]), (x3 + w / 2, tip[1])))
 
         # ---- Car wash (48", ribbons) heading west, 48" -> 32" funnel to the finish line.
         self.patch(0.0, 5.2, -0.61, 0.61, 'car_wash', base=W)

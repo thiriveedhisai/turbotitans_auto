@@ -71,6 +71,12 @@ class SpeedGovernor(TTNode):
         self.create_subscription(Bool, '/terrain/lidar_ok', self.on_lidar_ok, 10)
         self.create_subscription(Bool, '/estop', self.on_estop, 10)
         self.create_subscription(Bool, '/odom/degraded', self.on_degraded, 10)
+        self.terrain = 'flat'
+        self.create_subscription(String, '/terrain/state',
+                                 lambda m: setattr(self, 'terrain', m.data), 10)
+        self.ribbon_zones = tuple(p('ribbon_zones', ['car_wash', 'finish']))
+        self.zone = None
+        self.create_subscription(String, '/mission/state', self.on_mission_state, 10)
         self.create_subscription(String, '/behavior/cmd', self.on_behavior, 10)
         self.create_subscription(LaserScan, p('scan_topic', '/scan'), self.on_scan,
                                  qos_profile_sensor_data)
@@ -84,6 +90,12 @@ class SpeedGovernor(TTNode):
 
     def on_mission_cap(self, msg):
         self.mission_cap = msg.data
+
+    def on_mission_state(self, msg):
+        try:
+            self.zone = json.loads(msg.data).get('zone')
+        except ValueError:
+            pass
 
     def on_degraded(self, msg):
         self.degraded = msg.data
@@ -109,7 +121,9 @@ class SpeedGovernor(TTNode):
 
     def limit(self, v, s, now):
         cap = min(self.max_speed * self.scale, self.mission_cap * self.scale, self.terrain_cap)
-        if self.degraded:
+        # Not while climbing: tracking drops when nose-up at the crest, and the cap then
+        # held a low-friction stall below the speed needed to get over.
+        if self.degraded and self.terrain not in ('ramp_up', 'bank'):
             cap = min(cap, self.degraded_cap)
         v = min(v, cap) if v >= 0 else max(v, -min(self.max_rev, cap))
 
@@ -130,7 +144,9 @@ class SpeedGovernor(TTNode):
                                                      min_x=self.front_overhang, curvature=k,
                                                      axle_back=self.axle_back)
                     v = self.collision_cap(v, d, self.stop_d)
-            elif v < 0:
+            elif v < 0 and self.zone not in self.ribbon_zones:
+                # Not under ribbons: they hang behind as well and zeroed every back-off
+                # (wedged 0.44 m short of the finish line).
                 d = self.scan.corridor_clearance(self.corridor, False, min_x=self.rear_overhang,
                                                  curvature=k, axle_back=self.axle_back)
                 v = -self.collision_cap(-v, d, self.rear_stop_d)

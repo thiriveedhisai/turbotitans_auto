@@ -61,6 +61,7 @@ class GzReferee(Node):
         self.zone = ''
         self.mission_zone = None
         self.markers_seen = []
+        self.hoops_passed = set()
         self.last_progress = None
         self.max_speed = 0.0
 
@@ -160,6 +161,7 @@ class GzReferee(Node):
         self.pose = (x, y, z, roll, pitch, v)
         self.max_speed = max(self.max_speed, abs(v))
         zone = self.course.ground(x, y, z)[4]
+        self.check_hoops(x, y)
         self.check_finish_line(x, y)
         if zone and zone != self.zone:
             if self.t_start is not None:
@@ -181,6 +183,26 @@ class GzReferee(Node):
 
     def on_cmd(self, msg):
         self.cmd = (round(msg.speed, 2), round(msg.steering_angle, 3))
+
+    def check_hoops(self, x, y):
+        """A hoop counts when the truck's path crosses the segment between its legs."""
+        prev, self.prev_xy = getattr(self, 'prev_xy', None), (x, y)
+        if prev is None or self.t_start is None:
+            return
+        for k, ((ax, ay), (bx, by)) in enumerate(self.course.hoop_legs):
+            if k in self.hoops_passed:
+                continue
+            side = lambda px, py: (bx - ax) * (py - ay) - (by - ay) * (px - ax)  # noqa: E731
+            s0, s1 = side(*prev), side(x, y)
+            if s0 * s1 >= 0.0:
+                continue
+            # Crossing point along the legs' segment: 0..1 is between the legs.
+            dx, dy = x - prev[0], y - prev[1]
+            den = (bx - ax) * dy - (by - ay) * dx
+            u = ((prev[0] - ax) * dy - (prev[1] - ay) * dx) / den if den else -1.0
+            if 0.0 <= u <= 1.0:
+                self.hoops_passed.add(k)
+                self.event('HOOP', f'passed hoop {k + 1}')
 
     def check_finish_line(self, x, y):
         """Finish = crossing the line (box centre, across its heading) after the car wash."""
@@ -266,6 +288,7 @@ class GzReferee(Node):
                   'start_detector_s': (round(self.detector_fired - self.cover_removed, 2)
                                        if self.detector_fired and self.cover_removed else None),
                   'markers_seen': self.markers_seen, 'collisions': 'n/a (3D)',
+                  'hoops_passed': f'{len(self.hoops_passed)}/{len(self.course.hoop_legs)}',
                   'odom_err_max_m': round(self.odom_err_max, 2), 'odom_err_final_m': round(self.odom_err(), 2),
                   'rails': self.course.rails, 'events': self.events}
         os.makedirs(self.out_dir, exist_ok=True)
@@ -283,7 +306,7 @@ class GzReferee(Node):
             self.get_logger().warn(f'plot failed: {exc}')
         summary = (f'=== 3D RUN {outcome.upper()} in {result["time_s"]} s, furthest zone='
                    f'{result["furthest_zone"]}, markers={len(self.markers_seen)}, '
-                   f'odom err max {self.odom_err_max:.2f} m ===')
+                   f'hoops {result["hoops_passed"]}, odom err max {self.odom_err_max:.2f} m ===')
         (self.get_logger().info if outcome == 'finished' else self.get_logger().error)(summary)
         raise SystemExit(0)
 

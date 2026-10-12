@@ -321,8 +321,12 @@ governor slows down (`ros2 topic echo /ackermann_cmd`).
 ### Markers
 
 AprilTag `tag36h11`, IDs 0-11 mapped to zones in `tuning.yaml`
-(`tag_ids`/`tag_zones`). Print them matte, at least 15-20 cm, and set
-`tag_size` to the black-square edge length.
+(`tag_ids`/`tag_zones`); IDs 12-15 are reserved for the speed course (not mapped).
+Print-ready pages are in `markers/` (`all_markers.pdf`, A3 at 100%: black square
+exactly 200 mm = `tag_size`, with a 100 mm check bar). `markers/placement.csv` and
+`markers/placement_map.png` say where each one goes: tag centre 0.50 m above the floor,
+on the right-hand wall line at the zone entrance, face square to the lane toward the
+arriving truck. Regenerate with `python3 markers/make_markers.py` after changing IDs.
 
 ---
 

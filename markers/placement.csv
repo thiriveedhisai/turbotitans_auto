@@ -1,0 +1,17 @@
+id,zone,where,centre_height_m,sim_x_m,sim_y_m,faces_truck_travelling_deg
+0,start,"Start/finish line, on the right-hand (north) lane wall; the truck starts beside it.",0.5,0.0,0.41,180
+1,ramp_up,"Foot of the ramp (3.33 m past the start line), right-hand wall line.",0.5,-3.33,0.41,180
+2,tunnel,"Helix exit, where the 32"" funnel into the tunnel starts; right-hand (east) wall.",0.5,-6.44,-1.22,90
+3,narrow,"End of the tunnel straight, where the lane narrows 32"" -> 20""; right-hand (east) wall.",0.5,-6.56,4.16,90
+4,gravel,"Foot of the gravel ramp-up (start of the 32"" gravel entry); right-hand (south) wall.",0.5,-4.18,9.48,0
+5,bank_approach,"Zone line at the start of the bank entry lane; right-hand (south) side, 5 cm outside the lane wall.",0.5,0.83,9.23,0
+6,pothole,Zone line at the start of the return lane (west of the bank); right-hand (north) wall.,0.5,0.83,8.8,180
+7,wide,"Where the pothole lane ends into the wide area; right-hand (north) side, 0.66 m off the lane centre line. Visible from inside the pothole lane, so it only confirms.",0.5,-3.23,9.06,180
+8,buckets,"On the wide-area wall that holds the bucket-field entrance, 0.5 m to the right (south) of the entrance gap centre.",0.5,-2.96,0.95,0
+9,hoops,"On the bucket-field far wall, 0.5 m to the right (south) of the exit gap centre (start of the 36"" connector).",0.5,0.71,1.77,0
+10,car_wash,"East end of the car-wash lane (lane mouth after the hoop U-turn), right-hand (north) side, 0.25 m outside the lane wall.",0.5,4.97,0.66,180
+11,finish,"0.85 m before the finish line inside the 32"" funnel, right-hand (north) side.",0.5,0.85,0.66,180
+12,speed_1,"Speed course (reserved: not in marker_detector.tag_ids, so the obstacle mission ignores it).",,,,
+13,speed_2,"Speed course (reserved: not in marker_detector.tag_ids, so the obstacle mission ignores it).",,,,
+14,speed_3,"Speed course (reserved: not in marker_detector.tag_ids, so the obstacle mission ignores it).",,,,
+15,speed_4,"Speed course (reserved: not in marker_detector.tag_ids, so the obstacle mission ignores it).",,,,

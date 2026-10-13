@@ -53,11 +53,11 @@ class Config:
 
     def front(self, scan):
         return scan.corridor_clearance(self.half_width + self.sweep_margin, True,
-                                       min_x=self.front_overhang)
+                                       min_x=self.front_overhang, body_half=self.half_width)
 
     def rear(self, scan):
         return scan.corridor_clearance(self.half_width + self.sweep_margin, False,
-                                       min_x=self.rear_overhang)
+                                       min_x=self.rear_overhang, body_half=self.half_width)
 
 
 def _direction(value):
@@ -105,7 +105,8 @@ class Behavior:
 
         def clear(k, d):
             return ctx.scan.corridor_clearance(band, True, min_x=self.cfg.front_overhang,
-                                               curvature=k, axle_back=self.cfg.axle_back) >= d
+                                               curvature=k, axle_back=self.cfg.axle_back,
+                                               body_half=self.cfg.half_width) >= d
         if clear(kappa, need):
             return kappa
         if any_side:
@@ -218,7 +219,8 @@ class WallCenter(Behavior):
             look = min(1.4, max(0.7, 0.5 + 0.6 * speed))
         x_t = look - self.cfg.axle_back
         front = ctx.scan.corridor_clearance(self.cfg.half_width + 0.1, True,
-                                            min_x=self.cfg.front_overhang)
+                                            min_x=self.cfg.front_overhang,
+                                            body_half=self.cfg.half_width)
         if front < look:
             # Lane bends (or we're mis-headed) and its wall is inside the lookahead:
             # aim into the free space instead of a centre line fitted on a stub.

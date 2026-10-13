@@ -20,9 +20,10 @@ FALL_DROP = 0.20         # metres: a drop larger than this is a fall
 
 class Course:
 
-    def __init__(self, rails=True, seed=0):
+    def __init__(self, rails=True, seed=0, gap_b=None):
         self.rng = np.random.default_rng(seed)
         self.seed = seed
+        self.gap_b_override = gap_b
         self.rails = rails
         self.x, self.y, self.yaw = 0.0, 0.0, math.pi       # start heading west
         self.zone_names = []
@@ -321,7 +322,10 @@ class Course:
         depth, span = 3.67, 4.13
         F = (east, south, 0.0)
         hoop_y0, hoop_y1 = 1.36, 3.19
-        gap_b = 0.6 if self.seed == 0 else float(rng.uniform(0.55, span - 0.55))
+        # The entrance can be anywhere on the wall shared with the wide area (36" gap).
+        gap_b = 0.6 if self.seed == 0 else float(rng.uniform(0.46, span - 0.46))
+        if self.gap_b_override is not None:
+            gap_b = float(self.gap_b_override)
         exit_lo, exit_hi = hoop_y0 - south + 0.46, hoop_y1 - south - 0.46
         exit_b = 1.42 if self.seed == 0 else float(rng.uniform(exit_lo, exit_hi))
         self.gap_center = gap_b
@@ -331,7 +335,7 @@ class Course:
         self.wall([(0.0, gap_b - 0.45), (0.0, 0.0)], base=F)
         self.wall([(0.0, span), (depth, span), (depth, exit_b + 0.457)], base=F)
         self.wall([(depth, exit_b - 0.457), (depth, 0.0)], base=F)
-        self.marker_at('buckets', 0.0, gap_b - 0.5, F)
+        self.marker_at('buckets', 0.0, gap_b - 0.5 if gap_b >= 0.6 else gap_b + 0.5, F)
         self.waypoints['buckets'] = (*self.to_world(0.1, gap_b, F), 0.0)
         self.buckets = self.place_buckets(gap_b, exit_b, depth, span)
         for a, b in self.buckets:

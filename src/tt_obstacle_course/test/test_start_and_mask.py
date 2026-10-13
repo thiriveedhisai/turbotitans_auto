@@ -53,14 +53,19 @@ def test_red_disc_seen_as_red_not_green():
 
 
 def test_self_mask_drops_only_the_flag():
-    # Flag post 0.33 m behind-right of the lidar; a real wall 1 m to the right.
-    n = 360
+    # Flag pole 0.178 m behind, 0.10 m right of the lidar; a real wall 1 m to the right
+    # and a cone 0.6 m out in the pole's direction (beyond max_range: kept).
+    n = 720
     a = -math.pi + np.arange(n) * 2 * math.pi / n
     r = np.full(n, np.inf)
-    flag = np.argmin(np.abs(a - math.atan2(-0.10, -0.30)))
-    r[flag] = math.hypot(0.30, 0.10)
+    bearing = math.atan2(-0.10, -0.178)
+    flag = np.argmin(np.abs(a - bearing))
+    r[flag] = math.hypot(0.178, 0.10)
+    r[flag + 2] = 0.6
     wall = np.abs(a + math.pi / 2) < math.radians(10)
     r[wall] = 1.0 / np.cos(a[wall] + math.pi / 2)
-    masked = ScanView(r, -math.pi, 2 * math.pi / n, 0.05, 12.0, self_mask=[(-0.30, -0.10, 0.10)])
-    assert np.isfinite(masked.ranges).sum() == wall.sum()
+    masked = ScanView(r, -math.pi, 2 * math.pi / n, 0.05, 12.0,
+                      self_mask=[(math.degrees(bearing), 8.0, 0.28)])
+    assert np.isfinite(masked.ranges).sum() == wall.sum() + 1
+    assert np.isclose(masked.ranges, 0.6).sum() == 1
     assert abs(masked.side_distance(-1) - 1.0) < 0.01

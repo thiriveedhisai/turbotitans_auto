@@ -60,6 +60,12 @@ class CoursePerception(TTNode):
         self.gap_depth = float(self.param('min_gap_depth_beyond', 1.5))
         # Openings further back than this (e.g. the corridor just left) are ignored.
         self.gap_max_angle = math.radians(float(self.param('gap_max_angle_deg', 110.0)))
+        # Wider "openings" are far wall stretches dropping out of range seen obliquely
+        # (read 2.5-3 m wide, up to 0.9 m off the real 36" entrance); so are far ones
+        # (>3.9 m: sparse beams through the doorway onto the field). The real one
+        # confirms at 2-3 m from the search line.
+        self.side_gap_max = float(self.param('side_gap_max_width', 1.4))
+        self.side_gap_range = float(self.param('side_gap_max_range', 3.5))
         self.gate_width = float(self.param('gate_width', 0.60))
         self.front_gap = (float(self.param('front_gap_min_width', 0.6)),
                           float(self.param('front_gap_max_width', 1.4)),
@@ -128,14 +134,17 @@ class CoursePerception(TTNode):
         scan = self.scan_view(msg)
         lo, hi, depth = self.front_gap
         found = {
-            'left_gap': scan.find_side_openings(+1, self.min_gap, self.gap_depth,
-                                                a_to=self.gap_max_angle),
-            'right_gap': scan.find_side_openings(-1, self.min_gap, self.gap_depth,
-                                                 a_to=self.gap_max_angle),
+            side: [g for g in scan.find_side_openings(s, self.min_gap, self.gap_depth,
+                                                     a_to=self.gap_max_angle)
+                   if g['width'] <= self.side_gap_max
+                   and math.hypot(g['x'], g['y']) <= self.side_gap_range]
+            for side, s in (('left_gap', +1), ('right_gap', -1))
+        }
+        found.update({
             'front_gap': [g for g in scan.find_front_openings(lo, depth) if g['width'] <= hi],
             'gate': scan.find_gates(self.gate_width, self.gate_tol, self.post_extent,
                                     isolation=self.post_isolation),
-        }
+        })
         for key, dets in found.items():
             if key == 'gate':
                 checked = self.check_gates(dets)

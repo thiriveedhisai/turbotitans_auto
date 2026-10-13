@@ -210,6 +210,20 @@ def test_corridor_clearance_ignores_side_walls():
     assert blocked.corridor_clearance(0.18, forward=False) == math.inf
 
 
+def test_corridor_clearance_margin_tapers_from_bumper():
+    # Lane wall 0.15 m to the side (5 cm off an 8" truck), bumper 0.152 m ahead of the
+    # lidar: a full 0.18 m strip read it as an obstacle 0.155 m ahead and stopped the
+    # truck in every tight lane. The margin grows from the body over 0.15 m; a real box
+    # ahead in the lane is still seen.
+    wall = [((-2, 0.15), (10, 0.15))]
+    scan = raycast(wall, 0.0, 0.0, 0.0)
+    assert scan.corridor_clearance(0.18, min_x=0.152) < 0.17
+    # Tapered: only where the full margin is reached (~0.25 m), beyond stop-at-bumper.
+    assert scan.corridor_clearance(0.18, min_x=0.152, body_half=0.1015) > 0.24
+    box = raycast([((0.6, -0.05), (0.6, 0.05))], 0.0, 0.0, 0.0)
+    assert box.corridor_clearance(0.18, min_x=0.152, body_half=0.1015) == pytest.approx(0.6, abs=0.03)
+
+
 def test_corridor_clearance_arc_follows_steering():
     # Wall 0.16 m to the left, parallel (3-D sim tunnel stop): a straight strip
     # says blocked; steering right away from it is clear, steering left into it is not.

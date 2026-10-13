@@ -27,11 +27,15 @@ class BehaviorExecutor(TTNode):
 
     def __init__(self):
         super().__init__('behavior_executor')
+        front = float(self.param('vehicle.lidar_to_front', 0.20))
+        rear = float(self.param('vehicle.lidar_to_rear', 0.30))
+        cam = -float(self.param('laser_offset_x', -0.15))     # camera ahead of the lidar
         self.cfg = Config(self.steering_model(), {g: self.group(g) for g in GAIN_GROUPS},
                           half_width=float(self.param('vehicle.width', 0.20)) / 2.0,
                           sweep_margin=float(self.param('sweep_margin', 0.15)),
-                          front_overhang=float(self.param('vehicle.lidar_to_front', 0.20)),
-                          rear_overhang=float(self.param('vehicle.lidar_to_rear', 0.30)),
+                          front_overhang=front, rear_overhang=rear,
+                          odom_to_front=max(0.0, front - cam), odom_to_rear=rear + cam,
+                          camera_ahead=cam,
                           axle_back=float(self.param('vehicle.lidar_ahead_of_axle', 0.23)))
         st = self.group('stuck')
         self.stuck = StuckMonitor(float(st.get('min_speed', 0.05)), float(st.get('time_s', 1.5)),

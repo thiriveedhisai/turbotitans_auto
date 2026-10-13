@@ -26,13 +26,12 @@ class ScanView:
         a = _wrap(a + yaw_offset)
         valid = np.isfinite(r) & (r >= range_min) & (r <= range_max)
         r = np.where(valid, r, np.inf)
-        # Parts of our own truck (e.g. the flag mast at the rear-right corner): drop any
-        # return within radius of a vehicle-frame point [x, y, radius] (lidar centre origin).
-        for mx, my, mr in self_mask:
-            fin = np.isfinite(r)
-            hit = np.zeros(r.shape, bool)
-            hit[fin] = np.hypot(r[fin] * np.cos(a[fin]) - mx, r[fin] * np.sin(a[fin]) - my) <= mr
-            r = np.where(hit, np.inf, r)
+        # Parts of our own truck (the flag pole near the rear-right corner): drop returns in
+        # a narrow direction only, [bearing_deg, half_width_deg, max_range] in the vehicle
+        # frame. A circle around the lidar would also hide real obstacles close alongside.
+        for bearing, half, max_r in self_mask:
+            off = np.abs(_wrap(a - math.radians(bearing)))
+            r = np.where((off <= math.radians(half)) & (r <= max_r), np.inf, r)
         order = np.argsort(a)
         self.angles = a[order]
         self.ranges = r[order]
@@ -64,11 +63,16 @@ class ScanView:
         return float(r.min()) if r.size else math.inf
 
     def corridor_clearance(self, half_width, forward=True, ignore_half_angle=0.0, min_x=0.0,
-                           curvature=0.0, axle_back=0.0):
+                           curvature=0.0, axle_back=0.0, body_half=None, taper=0.15):
         """Distance to the nearest point inside the straight strip the vehicle
         would sweep (|y| <= half_width), ahead or behind. Side walls outside
         the strip are ignored, unlike an angular cone. Points closer than min_x
         (alongside the body, behind the bumper) are ignored: stopping can't help.
+
+        body_half: the strip's safety margin (half_width - body_half) grows from 0 at
+        the bumper to full over `taper` m. A lane wall 5 cm beside the bumper isn't in
+        the path (the steered band covers the drift); a full margin there stopped the
+        truck in every tight lane once the bumper was measured at 0.152 m, not 0.20.
 
         curvature != 0: check the arc band swept at that curvature instead
         (rotation centre on the rear-axle line, axle_back metres behind the
@@ -79,6 +83,11 @@ class ScanView:
             m &= np.abs(self.angles) > ignore_half_angle
         a, r = self.angles[m], self.ranges[m]
         x, y = r * np.cos(a), r * np.sin(a)
+
+        def band(s):
+            if body_half is None or taper <= 0.0:
+                return half_width
+            return body_half + (half_width - body_half) * np.clip((s - min_x) / taper, 0.0, 1.0)
         if abs(curvature) > 1e-3:
             side = 1.0 if curvature > 0 else -1.0
             cx, cy = -axle_back, side / abs(curvature)
@@ -88,10 +97,10 @@ class ScanView:
             if not forward:
                 dphi = -dphi
             arc = r_l * dphi
-            sel = (np.abs(np.hypot(x - cx, y - cy) - r_l) <= half_width) & (arc > min_x) & (dphi < math.pi / 2)
+            sel = (np.abs(np.hypot(x - cx, y - cy) - r_l) <= band(arc)) & (arc > min_x) & (dphi < math.pi / 2)
             return float(arc[sel].min()) if sel.any() else math.inf
         ahead = (x > min_x) if forward else (x < -min_x)
-        sel = (np.abs(y) <= half_width) & ahead
+        sel = (np.abs(y) <= band(np.abs(x))) & ahead
         return float(np.abs(x[sel]).min()) if sel.any() else math.inf
 
     def range_at(self, angle, half_window=3 * DEG):

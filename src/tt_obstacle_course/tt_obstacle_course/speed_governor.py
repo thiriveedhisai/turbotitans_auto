@@ -35,6 +35,7 @@ class SpeedGovernor(TTNode):
         self.steer_rate = float(p('steer_rate_limit', 3.0))
         self.front_half = float(p('front_half_angle_deg', 35.0)) * DEG
         self.corridor = float(p('vehicle.width', 0.20)) / 2.0 + float(p('corridor_margin', 0.08))
+        self.body_half = float(p('vehicle.width', 0.20)) / 2.0
         self.front_overhang = float(p('vehicle.lidar_to_front', 0.20))
         self.rear_overhang = float(p('vehicle.lidar_to_rear', 0.30))
         # Rotation centre for the swept-arc check: rear axle, this far behind the lidar.
@@ -141,13 +142,14 @@ class SpeedGovernor(TTNode):
                 if self.ignore_front < self.front_half:
                     d = self.scan.corridor_clearance(self.corridor, True, self.ignore_front,
                                                      min_x=self.front_overhang, curvature=k,
-                                                     axle_back=self.axle_back)
+                                                     axle_back=self.axle_back, body_half=self.body_half)
                     v = self.collision_cap(v, d, self.stop_d)
             elif v < 0 and self.zone not in self.ribbon_zones:
                 # Not under ribbons: they hang behind as well and zeroed every back-off
                 # (wedged 0.44 m short of the finish line).
                 d = self.scan.corridor_clearance(self.corridor, False, min_x=self.rear_overhang,
-                                                 curvature=k, axle_back=self.axle_back)
+                                                 curvature=k, axle_back=self.axle_back,
+                                                 body_half=self.body_half)
                 v = -self.collision_cap(-v, d, self.rear_stop_d)
         return v
 

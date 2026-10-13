@@ -207,10 +207,13 @@ zones:
       - behavior: plan_drive
         params: {goal: $exit_goal, speed: 0.5}
         until: [done]
-      # Planner gave up: thread the exit along its axis (reverses first if too close).
+      # Thread the exit along its axis (reverses first if too close): after a planner
+      # failure, and also when the plan ended "near goal" still in the field (seed 5:
+      # 0.6 m beside the exit, 0.46 m short of the far wall). Skipped once both walls of
+      # the 36" connector are alongside.
       - gate: {target: $exit_point, beyond: 1.0, commit_speed: 0.4, max_approach_deg: 35,
                margin: 0.2}
-        only_if_failed: true
+        skip_if: [corridor<=1.15]
 
   # 72" lane: hoops 96" and 192" from the field exit, anywhere across the lane; then a
   # right U-turn round a divider with hoop 3 across it (passed heading south), then

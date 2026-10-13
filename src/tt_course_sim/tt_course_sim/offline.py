@@ -66,8 +66,8 @@ class Truck:
         nx, ny = rx + ra * math.cos(nyaw), ry + ra * math.sin(nyaw)
         z, gx, gy, _, _ = self.c.ground(nx, ny, self.z)
         c, s = math.cos(nyaw), math.sin(nyaw)
-        us = [0.05, 0.05, 0.05, -0.2, -0.45, -0.45, -0.45, -0.2]
-        vs = [0.1, 0.0, -0.1, -0.1, -0.1, 0.0, 0.1, 0.1]
+        us = [0.0, 0.0, 0.0, -0.22, -0.43, -0.43, -0.43, -0.22]
+        vs = [0.1015, 0.0, -0.1015, -0.1015, -0.1015, 0.0, 0.1015, 0.1015]
         fx = [nx + c * u - s * v for u, v in zip(us, vs)]
         fy = [ny + s * u + c * v for u, v in zip(us, vs)]
         self.t += dt
@@ -98,6 +98,8 @@ def run(course, pose, behavior, params, max_s=40.0, radius=None, z=0.0, verbose=
                                      'k_turn')},
                  half_width=veh['width'] / 2, sweep_margin=ex.get('sweep_margin', 0.15),
                  front_overhang=veh['lidar_to_front'], rear_overhang=veh['lidar_to_rear'],
+                 odom_to_front=max(0.0, veh['lidar_to_front'] - 0.15),
+                 odom_to_rear=veh['lidar_to_rear'] + 0.15,
                  axle_back=veh['lidar_ahead_of_axle'])
     truck = truck or Truck(course, *pose, radius=radius, z=z)
     t_end = truck.t + max_s
@@ -136,14 +138,16 @@ def run(course, pose, behavior, params, max_s=40.0, radius=None, z=0.0, verbose=
             k = cfg.steering.steer_to_curvature(out_steer)
             if lidar_ok and v > 0:
                 d = scan.corridor_clearance(corridor, True, min_x=veh['lidar_to_front'],
-                                            curvature=k, axle_back=cfg.axle_back)
+                                            curvature=k, axle_back=cfg.axle_back,
+                                            body_half=veh['width'] / 2)
                 if d <= gov['stop_distance']:
                     v = 0.0
                 elif d < gov['slow_distance']:
                     v = min(v, max(gov['crawl_speed'], (d - gov['stop_distance']) / gov['ttc_brake_s']))
             elif lidar_ok and v < 0:
                 d = scan.corridor_clearance(corridor, False, min_x=veh['lidar_to_rear'],
-                                            curvature=k, axle_back=cfg.axle_back)
+                                            curvature=k, axle_back=cfg.axle_back,
+                                            body_half=veh['width'] / 2)
                 if d <= gov['rear_stop_distance']:
                     v = 0.0
         out_steer += max(-steer_rate * 0.01, min(steer_rate * 0.01, cmd.steer - out_steer))
@@ -216,6 +220,61 @@ def bank_chain(course, radius):
 CHAINS = {'bank': bank_chain}
 
 
+def wide_gap_chain(course, radius):
+    """mission.yaml wide zone: left turn, follow the left wall $turn_in_offset out until a
+    left opening >= min_from_start beyond the search start (as MissionManager.fresh_gap),
+    then plan_drive into it along the wall normal (as set_entrance + entry: plan)."""
+    shared = load_tuning()[0]
+    r = radius or shared['vehicle']['planning_min_turn_radius']
+    status, truck = run(course, course.waypoint('wide')[:3], 'arc_turn',
+                        {'direction': 'left', 'turn_deg': 90, 'radius': 1.6, 'speed': 0.6,
+                         'allow_kturn': True}, radius=r)
+    if status != 'done':
+        return 'turn_' + status, truck
+    sx, sy, syaw = truck.x, truck.y, truck.yaw
+    min_gap = shared['vehicle']['width'] + 0.25
+    found, track = [], []
+
+    def gap_ahead(t, s, ok):
+        if not ok:
+            return False
+        lx, ly = t.x - 0.15 * math.cos(t.yaw), t.y - 0.15 * math.sin(t.yaw)
+        # As course_perception: first opening within the width/range caps, 3 matching sightings.
+        dets = [g for g in s.find_side_openings(+1, min_gap, 1.5, a_to=math.radians(110))
+                if g['width'] <= 1.4 and math.hypot(g['x'], g['y']) <= 3.5]
+        if not dets:
+            track.clear()
+            return False
+        g = dets[0]
+        gx = lx + g['x'] * math.cos(t.yaw) - g['y'] * math.sin(t.yaw)
+        gy = ly + g['x'] * math.sin(t.yaw) + g['y'] * math.cos(t.yaw)
+        if track and math.hypot(gx - track[-1][0], gy - track[-1][1]) > 0.3:
+            track.clear()
+        track.append((gx, gy))
+        if len(track) < 3:
+            return False
+        ahead = (gx - t.x) * math.cos(t.yaw) + (gy - t.y) * math.sin(t.yaw)
+        from_start = (gx - sx) * math.cos(syaw) + (gy - sy) * math.sin(syaw)
+        if ahead > 0.3 and from_start >= 1.0:
+            found.append((gx, gy))
+            return True
+        return False
+    offset = r + 0.38 + 0.3
+    status, truck = run(course, None, 'wall_center',
+                        {'speed': 0.5, 'follow': 'left', 'wall_target': offset, 'max_wall': 2.6,
+                         'distance': 8.0}, radius=r, truck=truck, stop=gap_ahead)
+    if not found:
+        return 'no_gap', truck
+    gx, gy = truck.gap_seen = found[0]
+    axis = round((truck.yaw + math.pi / 2) / (math.pi / 2)) * (math.pi / 2)
+    goal = [gx + 0.6 * math.cos(axis), gy + 0.6 * math.sin(axis), axis]
+    return run(course, None, 'plan_drive', {'goal': goal, 'speed': 0.5}, radius=r, truck=truck,
+               max_s=60.0)
+
+
+CHAINS = {'bank': bank_chain}
+
+
 def _in_return_lane(course, truck):
     # Heading back west inside the 32" return lane at the pothole ramp (within the
     # plan's yaw tolerance; the pothole lane follower straightens the rest).
@@ -238,6 +297,27 @@ def _through_buckets(course, truck):
 ENDS = {'bank': _in_return_lane, 'narrow': _through_narrow, 'buckets': _through_buckets}
 
 
+def _in_bucket_field(course, truck):
+    # Through the entrance: east of the shared wall, within the field's north-south span.
+    return truck.x > -2.96 + 0.2 and 0.85 < truck.y < 0.85 + 4.13
+
+
+def sweep_entrances(radius, positions=(0.46, 0.8, 1.3, 1.9, 2.5, 3.1, 3.67)):
+    """Entrance anywhere along the wall shared by the wide area and the bucket field."""
+    ok = True
+    for b in positions:
+        course = Course(seed=1, gap_b=b)
+        status, truck = wide_gap_chain(course, radius)
+        seen = getattr(truck, 'gap_seen', (float('nan'),) * 2)
+        good = (status == 'done' and truck.collisions == 0 and _in_bucket_field(course, truck)
+                 and abs(seen[1] - (0.85 + b)) < 0.35)
+        ok &= good
+        print(f'{"PASS" if good else "FAIL"} wide_gap b={b:4.2f} status={status:10s} t={truck.t:5.1f}s '
+              f'collisions={truck.collisions} gap_err={seen[1] - 0.85 - b:+.2f} end=({truck.x:.2f}, {truck.y:.2f}, '
+              f'{math.degrees(truck.yaw):.0f} deg)')
+    return ok
+
+
 def main(argv):
     radius = None
     for a in list(argv):
@@ -245,6 +325,8 @@ def main(argv):
             radius = float(a.split('=', 1)[1])
             argv.remove(a)
     names = list(SCENARIOS) + list(CHAINS) if not argv or argv[0] == 'all' else argv
+    if names == ['entrances']:
+        return 0 if sweep_entrances(radius) else 1
     course = Course()
     ok = True
     for name in names:

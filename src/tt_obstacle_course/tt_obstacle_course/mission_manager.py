@@ -481,6 +481,13 @@ class MissionManager(TTNode):
             self.enter_zone(self.zone_idx + 1)
             return
         spec = steps[self.step_idx]
+        # skip_if: the step's goal is already achieved (e.g. already in the exit connector).
+        skip = [t for t in spec.get('skip_if', []) if self.run is not None
+                and self.fired(t, self.now_s())]
+        if skip:
+            self.get_logger().info(f'step {self.step_idx} skipped: {skip[0]}')
+            self.next_step()
+            return
         self.run = StepRun(spec, self.now_s(), self.odom)
         self.get_logger().info(f'step {self.step_idx}: {self.describe(spec)}')
         if 'behavior' in spec:
@@ -681,6 +688,14 @@ class MissionManager(TTNode):
                 return None
         return gap[0]
 
+    def plan_entry(self, nav, side, gap):
+        self.set_entrance(gap, side)
+        gx, gy, gyaw = self.last_gap
+        inside = float(nav.get('inside', 0.6))
+        self.send_behavior('plan_drive', {
+            'goal': [gx + inside * math.cos(gyaw), gy + inside * math.sin(gyaw), gyaw],
+            'speed': float(nav.get('turn_speed', 0.5))})
+
     def update_gap_fallback(self, run):
         # Without Nav2: wall-follow until a real opening is seen, then turn in.
         nav = run.spec['nav2']
@@ -787,12 +802,7 @@ class MissionManager(TTNode):
                     entry = nav.get('entry', 'turn_in')
                     if entry == 'plan':
                         # Hybrid-A* on the lidar map: plans around decoys, reverses if needed.
-                        self.set_entrance(gap, side)
-                        gyaw = self.last_gap[2]
-                        inside = float(nav.get('inside', 0.6))
-                        self.send_behavior('plan_drive', {
-                            'goal': [gx + inside * math.cos(gyaw), gy + inside * math.sin(gyaw), gyaw],
-                            'speed': float(nav.get('turn_speed', 0.5))})
+                        self.plan_entry(nav, side, gap)
                         run.phase = 'plan'
                         return
                     if entry != 'nav2' or not self.nav_usable():

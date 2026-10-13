@@ -9,20 +9,23 @@
     scan_topic: "/scan"
     scan_yaw_offset: 0.0               # rad; rotate scan so 0 = vehicle forward
     scan_flip: false                   # true if the lidar is mounted upside down
-    # Own-truck returns to drop, flat list of [x, y, radius] triples in the vehicle frame
-    # (lidar centre origin, x fwd, y left). MEASURE: flag mast at the rear-right corner.
-    scan_self_mask: [-0.30, -0.10, 0.10]
+    # Own-truck returns to drop: flat list of [bearing_deg, half_width_deg, max_range]
+    # triples (vehicle frame, lidar centre origin, 0 = forward, + = left). Only returns in
+    # that narrow wedge AND nearer than max_range go. Flag pole: 0.178 m behind the lidar
+    # (17" truck, lidar 6" from front, pole 4" from rear), ~0.10 m right (lidar assumed
+    # centred) -> -150.7 deg at 0.20 m. The truck's own corner is at 0.30 m.
+    scan_self_mask: [-150.7, 8.0, 0.28]
     laser_offset_x: -0.15              # MEASURE lidar position relative to ZED camera (fwd +)
     laser_offset_y: 0.0
     camera_height: 0.20                # MEASURE ZED left-lens centre above the ground
     vehicle:
       wheelbase: 0.32                  # MEASURE (axle to axle)
-      width: 0.20
-      length: 0.50
-      height: 0.25
+      width: 0.203                     # 8"
+      length: 0.432                    # 17"
+      height: 0.22                     # 8-9"
       ground_clearance: 0.076
-      lidar_to_front: 0.20             # MEASURE lidar centre to front bumper
-      lidar_to_rear: 0.30              # MEASURE lidar centre to rear bumper
+      lidar_to_front: 0.152            # 6"
+      lidar_to_rear: 0.28              # 17" - 6"
       lidar_ahead_of_axle: 0.23        # MEASURE lidar centre ahead of the rear axle (turn centre)
       # 3.5 ft target after the servo fix; launch arg turn_radius overrides everywhere.
       planning_min_turn_radius: 1.07
@@ -142,6 +145,8 @@ course_perception:
     min_gap_width_margin: 0.25         # opening must be vehicle.width + this
     min_gap_depth_beyond: 1.5          # range past the wall line; rejects closed notches
     gap_max_angle_deg: 110.0           # ignore openings behind (e.g. the lane just left)
+    side_gap_max_width: 1.4            # wider = far wall out of range, not a 36" entrance
+    side_gap_max_range: 3.5            # further = oblique, centre biased up to 0.9 m
     front_gap_min_width: 0.6           # bucket-field exit is 36"
     front_gap_max_width: 1.4
     front_gap_depth_beyond: 1.0

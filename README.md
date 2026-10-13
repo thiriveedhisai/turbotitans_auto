@@ -58,12 +58,14 @@ cd src/tt_obstacle_course && python3 -m pytest test/
 
 ## 3. Running
 
+Field quick reference (deploy, partial runs, stopping, live logs): [RUNBOOK.md](RUNBOOK.md).
+
 ```bash
-# Whole obstacle-course stack (ZED, lidar, perception, behaviors, Nav2, motor)
+# Whole obstacle-course stack (ZED, lidar, perception, behaviors, motor; Nav2 off by default)
 ros2 launch tt_obstacle_course obstacle_course.launch.py
 
-# Without Nav2 (behaviors and fallbacks only)
-ros2 launch tt_obstacle_course obstacle_course.launch.py use_nav2:=false
+# With Nav2
+ros2 launch tt_obstacle_course obstacle_course.launch.py use_nav2:=true
 
 # With your own tuning copy
 ros2 launch tt_obstacle_course obstacle_course.launch.py tuning:=/path/my_tuning.yaml

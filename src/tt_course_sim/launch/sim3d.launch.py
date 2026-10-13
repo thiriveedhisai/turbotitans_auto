@@ -35,11 +35,13 @@ def _setup(context):
     lc = lambda n: LaunchConfiguration(n).perform(context)  # noqa: E731
     seed, rails, radius = int(lc('seed')), lc('rails') == 'true', float(lc('turn_radius'))
     start_zone, out = lc('start_zone'), lc('output_dir')
+    gap_b = float(lc('gap_b')) if lc('gap_b') else -1.0
     share = FindPackageShare('tt_obstacle_course').perform(context)
     tuning = lc('tuning') or os.path.join(share, 'config', 'tuning.yaml')
     world, course, spawn = generate(os.path.join(out, 'world'), seed=seed, rails=rails,
                                     radius=radius, start_zone=start_zone, tag_map=_tag_map(tuning),
-                                    friction=float(lc('friction')))
+                                    friction=float(lc('friction')),
+                                    gap_b=gap_b if gap_b >= 0 else None)
     sim_time = {'use_sim_time': True}
 
     gz = ExecuteProcess(cmd=['gz', 'sim', '-s', '-r', '--headless-rendering', world],
@@ -66,11 +68,12 @@ def _setup(context):
                  output='screen', parameters=[sim_time, {'turn_radius': radius, 'publish_odom': not vo}])
     # ZED odometry from the simulated camera + IMU (drifts, loses tracking like the real one).
     zed_vo = Node(package='tt_course_sim', executable='zed_vo_sim', name='zed_vo_sim', output='screen',
-                  parameters=[sim_time, {'seed': seed, 'rails': rails, 'spawn': list(spawn),
+                  parameters=[sim_time, {'seed': seed, 'gap_b': gap_b, 'rails': rails, 'spawn': list(spawn),
                                          'blackout_zones': lc('vo_blackout')}])
     referee = Node(package='tt_course_sim', executable='gz_referee', name='gz_referee',
                    output='screen',
-                   parameters=[sim_time, {'seed': seed, 'rails': rails, 'start_zone': start_zone,
+                   parameters=[sim_time, {'seed': seed, 'gap_b': gap_b, 'rails': rails,
+                                          'start_zone': start_zone,
                                           'spawn': list(spawn), 'output_dir': out,
                                           'timeout': float(lc('timeout'))}])
     stack = IncludeLaunchDescription(
@@ -87,6 +90,9 @@ def _setup(context):
 def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('seed', default_value='0'),
+        DeclareLaunchArgument('gap_b', default_value='',
+                              description='Bucket entrance centre, m north of the field south wall '
+                                          '(0.46-3.67; empty = from seed)'),
         DeclareLaunchArgument('rails', default_value='true'),
         DeclareLaunchArgument('turn_radius', default_value='1.52'),
         DeclareLaunchArgument('friction', default_value='0.8',

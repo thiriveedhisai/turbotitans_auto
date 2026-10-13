@@ -340,6 +340,17 @@ class Course:
         self.buckets = self.place_buckets(gap_b, exit_b, depth, span)
         for a, b in self.buckets:
             self.disc(a, b, 0.15, 0.37, 'bucket', base=F)
+        # False obstruction against the wide area's left (bucket-field) wall, clear of the
+        # entrance; own RNG so existing layouts don't shift.
+        self.obstruction = None
+        if self.seed != 0:
+            orng = np.random.default_rng(self.seed + 1000)
+            gy = south + gap_b
+            spots = [y for y in np.arange(south + 0.3, 4.9, 0.05) if abs(y - gy) > 0.9]
+            if spots:
+                oy = float(orng.choice(spots))
+                self.obstruction = (east - 0.2, oy)
+                self.disc(east - 0.2, oy, 0.2, BALE_H, 'post', base=W)
 
         # ---- 36" connector, then the 72" hoop lane heading east.
         ex, ey = self.to_world(depth, exit_b, F)

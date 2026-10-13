@@ -672,6 +672,106 @@ class PlanDrive(Behavior):
         return Command(v, self.steer_for(kappa), RUNNING)
 
 
+class WallTrace(Behavior):
+    """Trace one wall's contour, forward only, until stopped from outside (e.g. an
+    opening found). Each tick: aim to keep `wall_target` m off the wall (pursuit of the
+    fitted wall line; no wall in reach -> head back to it at seek_deg), then drive the
+    clear arc nearest that aim. Obstacles on the line are passed on the open side and
+    the wall is rejoined after. The heading never turns more than `max_turn_deg` from
+    the start heading, so the search can't double back.
+
+    params: side (left|right), speed, wall_target, max_wall, seek_deg, need,
+            max_turn_deg, distance, heading_abs (search axis; default: start heading
+            snapped to the course grid)
+    """
+    name = 'wall_trace'
+    self_recovers = True       # boxed in: reverse swinging the nose to the open side
+
+    def start(self, ctx):
+        super().start(ctx)
+        if 'heading_abs' in self.p:
+            self.axis = float(self.p['heading_abs'])
+        else:
+            # The 3-D arc into the area ended 20 deg past the grid; the area runs on it.
+            self.axis = wrap_angle(round(ctx.odom.yaw / (math.pi / 2)) * (math.pi / 2))
+        self.reverse_from = None
+        self.reversals = 0
+
+    def aim(self, ctx, speed):
+        side = _direction(self.p.get('side', 'left'))
+        target = float(self.p.get('wall_target', 0.5))
+        line = ctx.scan.wall_line(side, max_dist=float(self.p.get('max_wall', 3.0)))
+        if line is None:
+            # Head back to the wall at seek_deg to the search axis (after going round
+            # something the truck points away from it; a gentle curve overshot the door).
+            seek = self.axis + side * float(self.p.get('seek_deg', 50.0)) * DEG
+            return 2.0 * wrap_angle(seek - ctx.odom.yaw), 'seeking wall'
+        y0, slope = line[0], line[1]
+        look = float(self.p.get('lookahead', min(1.6, max(1.0, 0.6 + 1.0 * speed))))
+        x_t = look - self.cfg.axle_back
+        y = y0 + slope * x_t - side * target * math.hypot(1.0, slope)
+        dx = x_t + self.cfg.axle_back
+        return 2.0 * y / (dx * dx + y * y), 'tracing'
+
+    def step(self, ctx, dt):
+        speed = float(self.p.get('speed', 0.45))
+        status = DONE if self.distance_done(ctx) else RUNNING
+        side = _direction(self.p.get('side', 'left'))
+        k_max = self.cfg.steering.max_curvature
+        if self.reverse_from is not None:
+            # Reverse at the lock that swings the nose toward the more open side.
+            back = ctx.odom.distance - self.reverse_from
+            rear_blocked = (ctx.lidar_ok and ctx.scan is not None
+                            and self.cfg.rear(ctx.scan) < self.cfg.rear_overhang + 0.12)
+            if back < float(self.p.get('reverse_m', 0.4)) and not rear_blocked:
+                return Command(-0.3, self.steer_for(-self.nose * k_max), RUNNING, 'reversing')
+            self.reverse_from = None
+        if not ctx.lidar_ok or ctx.scan is None:
+            kappa = 2.0 * wrap_angle(self.axis - ctx.odom.yaw)
+            return Command(speed * 0.6, self.steer_for(kappa), status, 'no_lidar')
+        want, why = self.aim(ctx, speed)
+        limit = float(self.p.get('max_turn_deg', 75.0)) * DEG
+        if why == 'seeking wall':
+            # Far from the wall: get to it well before any door; while tracing, the
+            # tighter limit keeps it from following round things standing off the wall.
+            limit = max(limit, (float(self.p.get('seek_deg', 50.0)) + 10.0) * DEG)
+        need = float(self.p.get('need', 0.7))
+        band = self.cfg.half_width + 0.1
+
+        def heading_ok(k):
+            # Heading after 0.5 m on this arc stays within the limit, or at least improves.
+            off = wrap_angle(ctx.odom.yaw + 0.5 * k - self.axis)
+            return abs(off) <= limit or abs(off) < abs(wrap_angle(ctx.odom.yaw - self.axis))
+
+        def clearance(k):
+            return ctx.scan.corridor_clearance(band, True, min_x=self.cfg.front_overhang,
+                                               curvature=k, axle_back=self.cfg.axle_back,
+                                               body_half=self.cfg.half_width)
+        want = max(-k_max, min(k_max, want))
+        arcs = sorted((k_max * f / 8.0 for f in range(-8, 9)), key=lambda k: abs(k - want))
+        arcs.insert(0, want)
+        for k in arcs:
+            if heading_ok(k) and clearance(k) >= need:
+                info = why if k == want else 'around obstacle'
+                return Command(speed, self.steer_for(k), status, info)
+        # Boxed in: creep on the arc with the most room until it closes, then reverse.
+        k = max((k for k in arcs if heading_ok(k)), key=clearance, default=want)
+        if clearance(k) > float(self.p.get('creep_min', 0.6)):
+            return Command(min(speed, 0.25), self.steer_for(k), status, 'blocked: creeping')
+        self.reversals += 1
+        if self.reversals > int(self.p.get('max_reversals', 12)):
+            return Command(0.0, 0.0, FAILED, 'boxed in')
+        self.reverse_from = ctx.odom.distance
+        off = wrap_angle(self.axis - ctx.odom.yaw)
+        if abs(off) > 15 * DEG:
+            # Reversing has no heading limit: always rotate back toward the search axis.
+            self.nose = 1 if off > 0 else -1
+        else:
+            room = {s: max(clearance(s * k_max * f) for f in (0.5, 1.0)) for s in (1, -1)}
+            self.nose = 1 if room[1] >= room[-1] else -1
+        return Command(0.0, self.steer_for(-self.nose * k_max), RUNNING, 'blocked: reversing')
+
+
 class BackOff(Behavior):
     """Reverse for a distance (stuck recovery), optionally with a steering angle. If the
     rear is blocked before it has moved, it tries the opposite steer once."""
@@ -691,7 +791,7 @@ class BackOff(Behavior):
 
 
 REGISTRY = {cls.name: cls for cls in
-            (Hold, HeadingHold, WallCenter, GapFollow, KTurn, ArcTurn, PlanDrive, BackOff)}
+            (Hold, HeadingHold, WallCenter, WallTrace, GapFollow, KTurn, ArcTurn, PlanDrive, BackOff)}
 
 
 def make_behavior(name, params, cfg):

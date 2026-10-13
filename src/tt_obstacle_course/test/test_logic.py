@@ -293,6 +293,28 @@ def test_side_opening_found_and_decoy_notch_rejected():
     assert decoy.find_side_openings(+1, min_width=0.45, depth_beyond=1.5) == []
 
 
+def test_wall_break_found_when_hugging_wall():
+    # Traced 0.5 m off the wall: a 36" door 1.5 m ahead, with a bucket 0.8 m inside it
+    # (the edge-run method ended on the bucket and read a 3 m opening).
+    segs = [((-1.0, 0.5), (1.05, 0.5)), ((1.96, 0.5), (8.0, 0.5)),
+            ((1.3, 1.3), (1.6, 1.3)), ((-1.0, -2.8), (8.0, -2.8))]
+    gaps = raycast(segs, 0.0, 0.0, 0.0, n=720).find_wall_breaks(+1, 0.45, 1.0)
+    assert gaps, 'door not detected'
+    assert gaps[0]['x'] == pytest.approx(1.5, abs=0.08)
+    assert gaps[0]['width'] == pytest.approx(0.91, abs=0.12)
+    assert gaps[0]['yaw'] == pytest.approx(math.pi / 2, abs=0.1)
+
+
+def test_wall_break_rejects_notch_and_shadow():
+    # Closed 0.65 m notch (zig-zag decoy depth), and a post standing in front of the wall:
+    # neither has beams passing 1 m beyond the wall line.
+    notch = [((-1.0, 0.5), (1.0, 0.5)), ((1.0, 0.5), (1.0, 1.15)), ((1.0, 1.15), (1.9, 1.15)),
+             ((1.9, 1.15), (1.9, 0.5)), ((1.9, 0.5), (8.0, 0.5))]
+    assert raycast(notch, 0.0, 0.0, 0.0, n=720).find_wall_breaks(+1, 0.45, 1.0) == []
+    post = [((-1.0, 0.5), (8.0, 0.5)), ((0.9, 0.3), (1.2, 0.3)), ((0.9, 0.3), (0.9, 0.5))]
+    assert raycast(post, 0.0, 0.0, 0.0, n=720).find_wall_breaks(+1, 0.45, 1.0) == []
+
+
 def test_gate_detection_from_two_posts():
     def post(cx, cy, r=0.02):
         return [((cx - r, cy - r), (cx + r, cy - r)), ((cx + r, cy - r), (cx + r, cy + r)),

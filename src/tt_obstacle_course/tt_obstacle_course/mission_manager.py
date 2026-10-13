@@ -684,7 +684,14 @@ class MissionManager(TTNode):
             # Ahead of where the search began, not of a wandering heading (seed 5 turned
             # east while wall-following and took the pothole lane mouth for the entrance).
             sx, sy, syaw = run.pose0
+            # Search axis on the course grid: the arc into the area can end 20-40 deg past it.
+            syaw = wrap_angle(round(syaw / (math.pi / 2)) * (math.pi / 2))
             if math.cos(syaw) * (gx - sx) + math.sin(syaw) * (gy - sy) < min_from_start:
+                return None
+            # An entrance is square to the wall being searched; a fit landing on something
+            # in front of the wall reads ~30 deg skewed.
+            skew = abs(abs(wrap_angle(gap[0][2] - syaw)) - math.pi / 2)
+            if skew > math.radians(float(run.spec.get('nav2', {}).get('max_skew_deg', 20.0))):
                 return None
         return gap[0]
 

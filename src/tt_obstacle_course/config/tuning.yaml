@@ -147,6 +147,7 @@ course_perception:
     gap_max_angle_deg: 110.0           # ignore openings behind (e.g. the lane just left)
     side_gap_max_width: 1.4            # wider = far wall out of range, not a 36" entrance
     side_gap_max_range: 3.5            # further = oblique, centre biased up to 0.9 m
+    wall_break_depth: 1.0              # traced wall: beams must pass this far through a break
     front_gap_min_width: 0.6           # bucket-field exit is 36"
     front_gap_max_width: 1.4
     front_gap_depth_beyond: 1.0

@@ -174,25 +174,26 @@ zones:
   # wall for the bucket-zone entrance. Decoy notches fail the depth test.
   - name: wide
     speed_cap: 0.9
-    timeout_s: 60
+    timeout_s: 90
     allow_marker_skip: false           # its tag is visible from inside the pothole lane
     steps:
       - behavior: arc_turn
         params: {direction: left, turn_deg: 90, radius: 1.6, speed: 0.6, allow_kturn: true}
         until: [done]
-      # Search = follow the left wall $turn_in_offset out (decoy notches are closed,
-      # so they fail the depth test). On a confirmed opening the onboard Hybrid-A*
-      # (full-lock arcs, forward + reverse, lidar map) plans the entry around decoys;
-      # if it can't, plan_turn_in lines up in the opening's frame and turns in.
+      # Search = trace the left wall ~0.5 m off it, forward only (never turns back toward
+      # the pothole lane), around anything standing on or near it, until the lidar sees a
+      # real opening in it (decoy notches are closed, so they fail the depth test). On a
+      # confirmed opening the onboard Hybrid-A* (full-lock arcs, forward + reverse, lidar
+      # map) plans the entry; if it can't, plan_turn_in lines up and turns in.
       # min_ahead / min_from_start: the pothole lane mouth sits just behind/abeam after
       # the turn and read as a left gap; the entrance is always >=2.5 m further south.
       - nav2: {goal: gap, side: left, entry: plan, inside: 0.6, turn_speed: 0.5, min_ahead: 0.3,
                min_from_start: 1.0}
         fallback:
-          behavior: wall_center
-          params: {speed: 0.5, follow: left, wall_target: $turn_in_offset, max_wall: 2.6}
+          behavior: wall_trace
+          params: {speed: 0.45, side: left, wall_target: $turn_in_offset, max_turn_deg: 45}
         until: [done]
-        timeout_s: 45
+        timeout_s: 60
 
   # 2-9 buckets; the exit (36") is somewhere on the far wall. Hybrid-A* toward a probe
   # point inside the field until the exit is confirmed in the far wall, then a plan

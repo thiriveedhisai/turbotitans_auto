@@ -66,6 +66,9 @@ class CoursePerception(TTNode):
         # confirms at 2-3 m from the search line.
         self.side_gap_max = float(self.param('side_gap_max_width', 1.4))
         self.side_gap_range = float(self.param('side_gap_max_range', 3.5))
+        # Wall traced close by: a break in it that beams pass this far beyond (decoy
+        # notches are 0.65 m deep; buckets can stand ~1 m inside the entrance).
+        self.break_depth = float(self.param('wall_break_depth', 1.0))
         self.gate_width = float(self.param('gate_width', 0.60))
         self.front_gap = (float(self.param('front_gap_min_width', 0.6)),
                           float(self.param('front_gap_max_width', 1.4)),
@@ -134,10 +137,11 @@ class CoursePerception(TTNode):
         scan = self.scan_view(msg)
         lo, hi, depth = self.front_gap
         found = {
-            side: [g for g in scan.find_side_openings(s, self.min_gap, self.gap_depth,
-                                                     a_to=self.gap_max_angle)
-                   if g['width'] <= self.side_gap_max
-                   and math.hypot(g['x'], g['y']) <= self.side_gap_range]
+            side: (scan.find_wall_breaks(s, self.min_gap, self.break_depth)
+                   or [g for g in scan.find_side_openings(s, self.min_gap, self.gap_depth,
+                                                           a_to=self.gap_max_angle)
+                       if g['width'] <= self.side_gap_max
+                       and math.hypot(g['x'], g['y']) <= self.side_gap_range])
             for side, s in (('left_gap', +1), ('right_gap', -1))
         }
         found.update({

@@ -295,12 +295,13 @@ def make_tags(out_dir, zones_to_ids, size_px=400, border=0.15):
     return files
 
 
-def generate(out_dir, seed=0, rails=True, radius=1.52, start_zone='', tag_map=None, friction=0.8):
+def generate(out_dir, seed=0, rails=True, radius=1.52, start_zone='', tag_map=None, friction=0.8,
+             gap_b=None):
     """Write world.sdf + tag textures into out_dir. Returns (world_path, course, spawn)."""
     global SURFACE_MU
     SURFACE_MU = friction
     os.makedirs(out_dir, exist_ok=True)
-    c = Course(rails=rails, seed=seed)
+    c = Course(rails=rails, seed=seed, gap_b=gap_b)
     rng = np.random.default_rng(seed + 100)
     tag_files = make_tags(out_dir, tag_map or {}) if tag_map else {}
     tex = make_textures(out_dir, seed)

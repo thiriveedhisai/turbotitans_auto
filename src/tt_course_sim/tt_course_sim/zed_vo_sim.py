@@ -51,7 +51,9 @@ class ZedVoSim(Node):
         self.depth_noise = float(p('depth_noise', 0.004))       # sigma = k * d^2 (stereo)
         self.blackout = [z for z in str(p('blackout_zones', '')).split(',') if z]
         seed = int(p('seed', 0))
-        self.course = Course(rails=bool(p('rails', True)), seed=seed) if self.blackout else None
+        gap_b = float(p('gap_b', -1.0))
+        self.course = Course(rails=bool(p('rails', True)), seed=seed,
+                             gap_b=gap_b if gap_b >= 0 else None) if self.blackout else None
         self.spawn = [float(v) for v in p('spawn', [0.0, 0.0, 0.0, 0.0])]
         self.rng = np.random.default_rng(seed + 11)
         self.orb = cv2.ORB_create(nfeatures=800, fastThreshold=12)

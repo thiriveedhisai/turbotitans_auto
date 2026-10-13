@@ -16,7 +16,7 @@ import yaml
 
 from tt_course_sim.course import FALL_DROP, Course
 from tt_obstacle_course.behaviors import RUNNING, Config, Context, StuckMonitor, make_behavior
-from tt_obstacle_course.geometry import OdomTracker, SteeringModel
+from tt_obstacle_course.geometry import OdomTracker, SteeringModel, wrap_angle
 from tt_obstacle_course.scan_utils import ScanView
 
 
@@ -220,18 +220,23 @@ def bank_chain(course, radius):
 CHAINS = {'bank': bank_chain}
 
 
-def wide_gap_chain(course, radius):
-    """mission.yaml wide zone: left turn, follow the left wall $turn_in_offset out until a
-    left opening >= min_from_start beyond the search start (as MissionManager.fresh_gap),
-    then plan_drive into it along the wall normal (as set_entrance + entry: plan)."""
+def wide_gap_chain(course, radius, pose=None):
+    """mission.yaml wide zone: left turn, trace the left wall until a left opening
+    >= min_from_start beyond the search start (as MissionManager.fresh_gap), then
+    plan_drive into it along the wall normal (as set_entrance + entry: plan).
+    pose: start the search here instead (e.g. where the 3-D arc really ended)."""
     shared = load_tuning()[0]
     r = radius or shared['vehicle']['planning_min_turn_radius']
-    status, truck = run(course, course.waypoint('wide')[:3], 'arc_turn',
-                        {'direction': 'left', 'turn_deg': 90, 'radius': 1.6, 'speed': 0.6,
-                         'allow_kturn': True}, radius=r)
-    if status != 'done':
-        return 'turn_' + status, truck
-    sx, sy, syaw = truck.x, truck.y, truck.yaw
+    if pose is None:
+        status, truck = run(course, course.waypoint('wide')[:3], 'arc_turn',
+                            {'direction': 'left', 'turn_deg': 90, 'radius': 1.6, 'speed': 0.6,
+                             'allow_kturn': True}, radius=r)
+        if status != 'done':
+            return 'turn_' + status, truck
+    else:
+        truck = Truck(course, *pose, radius=r)
+    sx, sy = truck.x, truck.y
+    syaw = wrap_angle(round(truck.yaw / (math.pi / 2)) * (math.pi / 2))
     min_gap = shared['vehicle']['width'] + 0.25
     found, track = [], []
 
@@ -240,8 +245,9 @@ def wide_gap_chain(course, radius):
             return False
         lx, ly = t.x - 0.15 * math.cos(t.yaw), t.y - 0.15 * math.sin(t.yaw)
         # As course_perception: first opening within the width/range caps, 3 matching sightings.
-        dets = [g for g in s.find_side_openings(+1, min_gap, 1.5, a_to=math.radians(110))
-                if g['width'] <= 1.4 and math.hypot(g['x'], g['y']) <= 3.5]
+        dets = (s.find_wall_breaks(+1, min_gap, 1.0)
+                or [g for g in s.find_side_openings(+1, min_gap, 1.5, a_to=math.radians(110))
+                    if g['width'] <= 1.4 and math.hypot(g['x'], g['y']) <= 3.5])
         if not dets:
             track.clear()
             return False
@@ -255,14 +261,15 @@ def wide_gap_chain(course, radius):
             return False
         ahead = (gx - t.x) * math.cos(t.yaw) + (gy - t.y) * math.sin(t.yaw)
         from_start = (gx - sx) * math.cos(syaw) + (gy - sy) * math.sin(syaw)
-        if ahead > 0.3 and from_start >= 1.0:
+        if ahead > 0.3 and from_start >= 1.0 \
+                and abs(abs(wrap_angle(t.yaw + g['yaw'] - syaw)) - math.pi / 2) <= math.radians(20):
             found.append((gx, gy))
             return True
         return False
-    offset = r + 0.38 + 0.3
-    status, truck = run(course, None, 'wall_center',
-                        {'speed': 0.5, 'follow': 'left', 'wall_target': offset, 'max_wall': 2.6,
-                         'distance': 8.0}, radius=r, truck=truck, stop=gap_ahead)
+    status, truck = run(course, None, 'wall_trace',
+                        {'speed': 0.45, 'side': 'left', 'wall_target': r + 0.38 + 0.3,
+                         'max_turn_deg': 45,
+                         'distance': 9.0}, radius=r, truck=truck, stop=gap_ahead)
     if not found:
         return 'no_gap', truck
     gx, gy = truck.gap_seen = found[0]

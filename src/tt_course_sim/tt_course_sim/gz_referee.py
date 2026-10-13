@@ -42,7 +42,9 @@ class GzReferee(Node):
         super().__init__('gz_referee')
         p = lambda n, d: self.declare_parameter(n, d).value  # noqa: E731
         self.seed = int(p('seed', 0))
-        self.course = Course(rails=bool(p('rails', True)), seed=self.seed)
+        gap_b = float(p('gap_b', -1.0))
+        self.course = Course(rails=bool(p('rails', True)), seed=self.seed,
+                             gap_b=gap_b if gap_b >= 0 else None)
         self.start_zone = str(p('start_zone', ''))
         self.spawn = [float(v) for v in p('spawn', [0.0, 0.0, 0.0, 0.0])]
         self.out_dir = p('output_dir', '/tmp/tt_gz_run')

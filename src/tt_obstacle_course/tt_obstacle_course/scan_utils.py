@@ -220,6 +220,94 @@ class ScanView:
                     g['yaw'] = axis
         return found
 
+    def wall_line(self, side, max_dist=3.5, x_min=-1.0, x_max=4.0, tol=0.05, max_slope=0.7,
+                  iters=120, min_span=0.8):
+        """The dominant straight wall on ``side``: RANSAC over that side's returns.
+        Returns (y0, slope, inliers) in the robot frame (signed y = y0 + slope * x) or None.
+        The longest straight run wins, so decoy legs (steep), posts and buckets (round)
+        and short stubs don't drag it the way a nearest-point fit does."""
+        xs, ys = self.points()
+        m = (xs >= x_min) & (xs <= x_max) & (side * ys > 0.15) & (side * ys < max_dist)
+        px, py = xs[m], ys[m]
+        n = px.size
+        if n < 8:
+            return None
+        rng = np.random.default_rng(0)
+        best, best_in = None, None
+        pairs = rng.integers(0, n, size=(iters, 2))
+        for i, j in pairs:
+            dx = px[j] - px[i]
+            if abs(dx) < 0.3:
+                continue
+            s = (py[j] - py[i]) / dx
+            if abs(s) > max_slope:
+                continue
+            c = py[i] - s * px[i]
+            inl = np.abs(py - (c + s * px)) / math.hypot(1.0, s) < tol
+            if best_in is None or inl.sum() > best_in.sum():
+                best, best_in = (c, s), inl
+        if best is None or best_in.sum() < 8 or np.ptp(px[best_in]) < min_span:
+            return None
+        s, c = np.polyfit(px[best_in], py[best_in], 1)
+        return float(c), float(s), int(best_in.sum())
+
+    def find_wall_breaks(self, side, min_width, depth_beyond, max_wall=3.0, u_max=4.0,
+                         on_wall=0.12, min_beams=2, max_width=1.4, support=0.5):
+        """Openings in the wall on ``side`` measured along that wall: fit the wall line
+        (wall_line), find stretches of it with no returns on it, and keep those that beams
+        pass through to depth_beyond past it. Both ends are the opening's own jambs, so
+        the centre is exact even seen obliquely (the edge-run method ended runs on buckets
+        beyond a doorway, reading 3 m wide). Closed notches and things standing in front
+        of the wall have no such beams.
+        Returns dicts like find_side_openings (robot frame), nearest first."""
+        line = self.wall_line(side, max_dist=max_wall, x_min=-0.6, x_max=u_max)
+        if line is None:
+            return []
+        y0, slope = line[0], line[1]
+        norm = math.hypot(1.0, slope)
+        ux, uy = 1.0 / norm, slope / norm          # along the wall
+        nx, ny = -uy * side, ux * side             # away from the robot, through the wall
+        if nx * 0.0 + ny * y0 < 0:
+            nx, ny = -nx, -ny
+        m = (side * self.angles > 0.0) & (side * self.angles < math.pi)
+        a, r = self.angles[m], self.ranges[m]
+        fin = np.isfinite(r)
+        px, py = r[fin] * np.cos(a[fin]), r[fin] * np.sin(a[fin])
+        u = px * ux + (py - y0) * uy
+        v = px * nx + (py - y0) * ny
+        on = np.sort(u[(np.abs(v) <= on_wall) & (u > -0.6) & (u < u_max)])
+        if on.size < 6:
+            return []
+        real = on
+        # Where each beam crosses the wall line, and how far past it it reaches.
+        dx, dy = np.cos(a), np.sin(a)
+        denom = dx * nx + dy * ny
+        t = np.where(np.abs(denom) > 1e-3, (0.0 * nx + y0 * ny) / np.where(denom == 0, 1, denom), -1)
+        cross_u = t * (dx * ux + dy * uy) + (0.0 - 0.0) - y0 * uy
+        beyond = np.where(np.isfinite(r), r - t, np.inf) * np.abs(denom)
+        through = (t > 0) & (beyond >= depth_beyond)
+        # A beam stopped short of the wall (something standing in front of it) says
+        # nothing about the wall there: its shadow must not merge with a real opening.
+        shadow = cross_u[(t > 0) & np.isfinite(r) & (beyond < -on_wall)]
+        on = np.sort(np.concatenate([on, shadow[(shadow > -0.6) & (shadow < u_max)]]))
+        out = []
+        for u1, u2 in zip(on[:-1], on[1:]):
+            if not min_width <= u2 - u1 <= max_width:
+                continue
+            # Real wall on both sides (a fit tilted onto something in front of the wall
+            # crosses the wall at one point only).
+            if (np.count_nonzero((real >= u1 - support) & (real <= u1)) < 3
+                    or np.count_nonzero((real >= u2) & (real <= u2 + support)) < 3):
+                continue
+            if np.count_nonzero(through & (cross_u > u1) & (cross_u < u2)) < min_beams:
+                continue
+            c = (u1 + u2) / 2.0
+            cx, cy = c * ux, y0 + c * uy
+            out.append({'x': float(cx), 'y': float(cy), 'yaw': math.atan2(ny, nx),
+                        'width': float(u2 - u1)})
+        out.sort(key=lambda g: math.hypot(g['x'], g['y']))
+        return out
+
     def find_front_openings(self, min_width, depth_beyond, half_angle=60 * DEG):
         """Openings in the wall ahead (roughly square to the heading) that lead somewhere."""
         a, r = self.sector(-half_angle, half_angle)

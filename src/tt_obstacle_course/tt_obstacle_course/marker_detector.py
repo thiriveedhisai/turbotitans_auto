@@ -3,6 +3,8 @@
 Publishes:
   /zone_event         String  zone name for a confirmed marker (rate limited)
   /marker/detections  String  JSON list of {id, zone, distance, bearing_deg}
+  /perception/bright_exit  Float32  bearing (rad, + left) of a bright lane end (tunnel exit),
+                      NaN when nothing stands out
 """
 
 import math
@@ -12,8 +14,9 @@ import numpy as np
 from cv_bridge import CvBridge
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import CameraInfo, Image
-from std_msgs.msg import String
+from std_msgs.msg import Float32, String
 
+from tt_obstacle_course.light_blob import bright_exit
 from tt_obstacle_course.ros_common import TTNode, dumps, run
 
 FAMILIES = {
@@ -63,6 +66,9 @@ class MarkerDetector(TTNode):
 
         self.pub_zone = self.create_publisher(String, '/zone_event', 10)
         self.pub_det = self.create_publisher(String, '/marker/detections', 10)
+        self.pub_bright = self.create_publisher(Float32, '/perception/bright_exit', 10)
+        self.bright_ratio = float(self.param('bright_exit_ratio', 1.8))
+        self.last_bright_log = -1e9
         self.create_subscription(
             CameraInfo, self.param('camera_info_topic', '/zed/zed_node/rgb/color/rect/camera_info'),
             self.on_info, qos_profile_sensor_data)
@@ -78,6 +84,11 @@ class MarkerDetector(TTNode):
         if self.K is None:
             return
         gray = self.bridge.imgmsg_to_cv2(msg, desired_encoding='mono8')
+        bearing = bright_exit(gray, self.K[0, 0], self.K[0, 2], min_ratio=self.bright_ratio)
+        self.pub_bright.publish(Float32(data=float('nan') if bearing is None else bearing))
+        if bearing is not None and self.now_s() - self.last_bright_log > 2.0:
+            self.last_bright_log = self.now_s()
+            self.get_logger().info(f'bright exit at {math.degrees(bearing):+.0f} deg')
         corners, ids, _ = self.detect(gray)
         if ids is None:
             # Dim tunnel / backlit tag: retry on a locally contrast-equalised image.

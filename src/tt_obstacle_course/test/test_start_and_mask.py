@@ -3,8 +3,9 @@ import math
 
 import cv2
 import numpy as np
+import pytest
 
-from tt_obstacle_course.light_blob import RED_RANGES, colour_mask, disc_centres
+from tt_obstacle_course.light_blob import RED_RANGES, bright_exit, colour_mask, disc_centres
 from tt_obstacle_course.scan_utils import ScanView
 
 GREEN = [([40, 80, 60], [85, 255, 255])]
@@ -50,6 +51,25 @@ def test_red_disc_seen_as_red_not_green():
     draw = lambda im: cv2.circle(im, (320, 200), 60, BGR_RED, -1)  # noqa: E731
     assert _found(draw, RED_RANGES)
     assert not _found(draw)
+
+
+def test_bright_exit_bearing_in_tunnel():
+    # Dark tunnel (walls ~40, textured), exit 60 px left of centre and much brighter.
+    rng = np.random.default_rng(0)
+    img = np.clip(rng.normal(40, 8, (360, 640)), 0, 255).astype(np.uint8)
+    cv2.rectangle(img, (230, 185), (290, 250), 220, -1)
+    fx, cx = 320.0, 320.0
+    b = bright_exit(img, fx, cx)
+    assert b is not None
+    assert b == pytest.approx(math.atan2(60, fx), abs=math.radians(3))
+
+
+def test_bright_exit_none_in_the_open():
+    # Evenly lit course: a sunny patch isn't 1.8x the scene.
+    rng = np.random.default_rng(1)
+    img = np.clip(rng.normal(150, 20, (360, 640)), 0, 255).astype(np.uint8)
+    cv2.rectangle(img, (400, 200), (460, 260), 200, -1)
+    assert bright_exit(img, 320.0, 320.0) is None
 
 
 def test_self_mask_drops_only_the_flag():

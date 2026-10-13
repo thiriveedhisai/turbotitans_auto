@@ -16,6 +16,35 @@ def colour_mask(hsv, ranges):
     return cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
 
 
+def bright_exit(gray, fx, cx, min_ratio=1.8, min_frac=0.004, band=(0.5, 0.9), scale=4):
+    """Bearing (rad, + left) of the far end of a dark lane: the brightest large blob below
+    the horizon of a grey image, if it stands out from the scene. Inside a tunnel the lit
+    floor beyond the exit is several times brighter than the shaded floor and walls; in the
+    open the whole floor is lit -> None. Rows above the horizon are left out: the sky over
+    the walls read as an 'exit' 30 deg off at the tunnel mouth.
+
+    min_ratio: blob mean / band median brightness; min_frac: blob area / band area."""
+    h, w = gray.shape[:2]
+    small = cv2.resize(gray, (w // scale, h // scale), interpolation=cv2.INTER_AREA)
+    r0, r1 = int(band[0] * small.shape[0]), int(band[1] * small.shape[0])
+    roi = cv2.GaussianBlur(small[r0:r1], (5, 5), 0)
+    median = float(np.median(roi))
+    peak = float(roi.max())
+    if peak < max(40.0, min_ratio * max(median, 1.0)):
+        return None
+    mask = (roi >= max(0.8 * peak, min_ratio * median)).astype(np.uint8)
+    n, labels, stats, cents = cv2.connectedComponentsWithStats(mask)
+    if n < 2:
+        return None
+    i = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+    if stats[i, cv2.CC_STAT_AREA] < min_frac * roi.size:
+        return None
+    if float(roi[labels == i].mean()) < min_ratio * max(median, 1.0):
+        return None
+    u = cents[i][0] * scale
+    return math.atan2(-(u - cx), fx)
+
+
 def disc_centres(mask, min_area, min_circularity=0.6, min_disc_fraction=0.45):
     """Centres (u, v) of blobs that are a disc, largest first.
 

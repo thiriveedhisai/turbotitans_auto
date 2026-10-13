@@ -87,10 +87,12 @@ zones:
     steps:
       # Walls are visible from the helix exit: centre on them rather than hold the
       # heading arc_turn ended on (stops 5 deg short, steering still unwinding).
+      # light_weight: the exit is far brighter than the tunnel walls in the camera; aim
+      # at it too, and only at it while the lidar is blind (banked at the helix exit).
       - behavior: wall_center
-        params: {speed: 0.5, distance: 1.0}
+        params: {speed: 0.5, distance: 1.0, light_weight: 0.5}
       - behavior: wall_center
-        params: {speed: 1.0}
+        params: {speed: 1.0, light_weight: 0.3}
         until: [distance>=3.2, marker=narrow]
 
   # 20" straight, then a 28" wide right curve (~6 ft radius) into the gravel lane.

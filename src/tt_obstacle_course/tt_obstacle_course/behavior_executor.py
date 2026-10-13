@@ -12,7 +12,7 @@ from ackermann_msgs.msg import AckermannDrive
 from nav_msgs.msg import Odometry
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import LaserScan
-from std_msgs.msg import Bool, String
+from std_msgs.msg import Bool, Float32, String
 
 from tt_obstacle_course.behaviors import (DONE, FAILED, RUNNING, Config, Context, Hold,
                                           StuckMonitor, make_behavior)
@@ -64,6 +64,8 @@ class BehaviorExecutor(TTNode):
                                  self.on_scan, qos_profile_sensor_data)
         self.create_subscription(Bool, '/terrain/lidar_ok', self.on_lidar_ok, 10)
         self.create_subscription(String, '/terrain/state', self.on_terrain, 10)
+        self.light = (None, -1e9)
+        self.create_subscription(Float32, '/perception/bright_exit', self.on_light, 10)
         self.create_timer(1.0 / self.rate, self.tick)
         self.create_timer(0.2, self.publish_status)
 
@@ -91,11 +93,16 @@ class BehaviorExecutor(TTNode):
     def on_terrain(self, msg):
         self.terrain = msg.data
 
+    def on_light(self, msg):
+        self.light = (None if msg.data != msg.data else float(msg.data), self.now_s())
+
     # ---------------------------------------------------------------- loop
     def make_context(self, now):
         fresh = self.scan is not None and now - self.scan_time < 0.5
+        light = self.light[0] if now - self.light[1] < 0.5 else None
         return Context(t=now, odom=self.odom, scan=self.scan if fresh else None,
-                       lidar_ok=self.lidar_ok and fresh, terrain=self.terrain)
+                       lidar_ok=self.lidar_ok and fresh, terrain=self.terrain,
+                       light_bearing=light)
 
     def activate(self, ctx):
         req, self.pending = self.pending, None

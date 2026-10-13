@@ -33,6 +33,7 @@ class Context:
     scan: object = None          # ScanView or None
     lidar_ok: bool = True        # False when tilted: 2D scan hits floor/sky
     terrain: str = 'flat'
+    light_bearing: float = None  # camera bearing (rad, + left) of a bright lane end, or None
 
 
 @dataclass
@@ -200,7 +201,9 @@ class WallCenter(Behavior):
     back to the other wall at half that width. No walls: hold the last heading.
     params: speed, follow (center|left|right), wall_target (one-wall distance),
             max_wall (ignore walls farther than this), offset (+ left of centre),
-            lookahead (m from the rear axle; default grows with speed), distance
+            lookahead (m from the rear axle; default grows with speed), distance,
+            light_weight (0-1: blend in steering at the bright lane end seen by the
+            camera, e.g. a tunnel exit; it steers alone when the lidar has no walls)
     """
     name = 'wall_center'
 
@@ -248,17 +251,33 @@ class WallCenter(Behavior):
             return None
         return x_t, y + float(self.p.get('offset', 0.0))
 
+    def light_kappa(self, ctx):
+        """Pursuit toward a point 1.5 m out along the camera bearing of the bright exit."""
+        if ctx.light_bearing is None or float(self.p.get('light_weight', 0.0)) <= 0.0:
+            return None
+        d = 1.5
+        dx = self.cfg.axle_back + self.cfg.camera_ahead + d * math.cos(ctx.light_bearing)
+        dy = d * math.sin(ctx.light_bearing)
+        return 2.0 * dy / (dx * dx + dy * dy)
+
     def step(self, ctx, dt):
         speed = float(self.p.get('speed', 0.6))
         status = DONE if self.distance_done(ctx) else RUNNING
         tgt = self.lane_centre(ctx, speed) if (ctx.lidar_ok and ctx.scan is not None) else None
+        k_light = self.light_kappa(ctx)
         if tgt is None:
+            if k_light is not None:
+                # Banked or tilted at the tunnel mouth (lidar unusable): aim at the exit.
+                return Command(speed, self.steer_for(k_light), status, 'no_walls: light')
             # No walls (e.g. on a ramp): keep the last good heading.
             kappa = 2.0 * wrap_angle(self.hold_yaw - ctx.odom.yaw)
             return Command(speed, self.steer_for(kappa), status, 'no_walls')
         self.hold_yaw = ctx.odom.yaw
         dx, dy = tgt[0] + self.cfg.axle_back, tgt[1]
         kappa = 2.0 * dy / (dx * dx + dy * dy)
+        if k_light is not None:
+            w = float(self.p['light_weight'])
+            kappa = (1.0 - w) * kappa + w * k_light
         # In a bend every gentler arc runs into the outer wall: ease off only into open space.
         return Command(speed, self.steer_for(self.clear_kappa(ctx, kappa, open_m=0.9)), status)
 

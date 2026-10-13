@@ -18,7 +18,7 @@ def _wrap(a):
 class ScanView:
 
     def __init__(self, ranges, angle_min, angle_increment, range_min, range_max,
-                 yaw_offset=0.0, flip=False):
+                 yaw_offset=0.0, flip=False, self_mask=()):
         r = np.asarray(ranges, dtype=float)
         a = angle_min + np.arange(r.size) * angle_increment
         if flip:
@@ -26,15 +26,22 @@ class ScanView:
         a = _wrap(a + yaw_offset)
         valid = np.isfinite(r) & (r >= range_min) & (r <= range_max)
         r = np.where(valid, r, np.inf)
+        # Parts of our own truck (e.g. the flag mast at the rear-right corner): drop any
+        # return within radius of a vehicle-frame point [x, y, radius] (lidar centre origin).
+        for mx, my, mr in self_mask:
+            fin = np.isfinite(r)
+            hit = np.zeros(r.shape, bool)
+            hit[fin] = np.hypot(r[fin] * np.cos(a[fin]) - mx, r[fin] * np.sin(a[fin]) - my) <= mr
+            r = np.where(hit, np.inf, r)
         order = np.argsort(a)
         self.angles = a[order]
         self.ranges = r[order]
 
     @classmethod
-    def from_msg(cls, msg, yaw_offset=0.0, flip=False, range_min=None):
+    def from_msg(cls, msg, yaw_offset=0.0, flip=False, range_min=None, self_mask=()):
         return cls(msg.ranges, msg.angle_min, msg.angle_increment,
                    msg.range_min if range_min is None else range_min,
-                   msg.range_max, yaw_offset, flip)
+                   msg.range_max, yaw_offset, flip, self_mask)
 
     # ---------------------------------------------------------------- basics
     def sector(self, a0, a1):

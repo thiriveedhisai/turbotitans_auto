@@ -7,6 +7,7 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 
 from tt_obstacle_course.geometry import SteeringModel
+from tt_obstacle_course.scan_utils import ScanView
 
 LATCHED = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                      durability=DurabilityPolicy.TRANSIENT_LOCAL)
@@ -39,6 +40,15 @@ class TTNode(Node):
 
     def scan_args(self):
         return (float(self.param('scan_yaw_offset', 0.0)), bool(self.param('scan_flip', False)))
+
+    def scan_view(self, msg):
+        """ScanView in the vehicle frame with our own parts (scan_self_mask) removed."""
+        if not hasattr(self, '_scan_cfg'):
+            flat = [float(v) for v in self.param('scan_self_mask', [0.0])]
+            mask = [tuple(flat[i:i + 3]) for i in range(0, len(flat) - 2, 3)]
+            self._scan_cfg = self.scan_args() + (mask,)
+        yaw, flip, mask = self._scan_cfg
+        return ScanView.from_msg(msg, yaw, flip, self_mask=mask)
 
 
 def odom_update(tracker, msg):

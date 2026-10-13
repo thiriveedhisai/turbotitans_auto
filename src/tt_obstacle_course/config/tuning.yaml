@@ -9,6 +9,9 @@
     scan_topic: "/scan"
     scan_yaw_offset: 0.0               # rad; rotate scan so 0 = vehicle forward
     scan_flip: false                   # true if the lidar is mounted upside down
+    # Own-truck returns to drop, flat list of [x, y, radius] triples in the vehicle frame
+    # (lidar centre origin, x fwd, y left). MEASURE: flag mast at the rear-right corner.
+    scan_self_mask: [-0.30, -0.10, 0.10]
     laser_offset_x: -0.15              # MEASURE lidar position relative to ZED camera (fwd +)
     laser_offset_y: 0.0
     camera_height: 0.20                # MEASURE ZED left-lens centre above the ground

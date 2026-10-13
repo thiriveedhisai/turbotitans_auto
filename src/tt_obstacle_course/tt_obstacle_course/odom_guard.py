@@ -30,7 +30,7 @@ from tf2_ros import TransformBroadcaster
 
 from tt_obstacle_course.geometry import quat_to_rpy, wrap_angle
 from tt_obstacle_course.ros_common import TTNode, run
-from tt_obstacle_course.scan_utils import ScanView, scan_shift
+from tt_obstacle_course.scan_utils import scan_shift
 
 
 class OdomGuard(TTNode):
@@ -52,7 +52,6 @@ class OdomGuard(TTNode):
         self.wall_tol = math.radians(float(g('wall_heading_tol_deg', 8.0)))
         self.wall_gain = float(g('wall_heading_gain', 0.08))
         self.grid = None                # learned grid phase (start lane), rad
-        self.yaw_off, self.flip = self.scan_args()
 
         self.raw = None                 # (t, x, y, z, roll, pitch, yaw)
         self.raw_hist = collections.deque()
@@ -69,8 +68,6 @@ class OdomGuard(TTNode):
         self.gyro_yaw = 0.0
         self.gyro_used = 0.0
         self.imu_t = None
-        self.gyro_hist = collections.deque()
-        self.raw_gyro = 0.0
         self.imu_rp = (0.0, 0.0)
         self.scans = collections.deque()
         self.scan_moving = False
@@ -104,11 +101,6 @@ class OdomGuard(TTNode):
         t = self.now_s()
         self.raw_speed = msg.twist.twist.linear.x
         self.raw = (t, p.x, p.y, p.z, roll, pitch, yaw)
-        # Gyro heading at the pose's own stamp: the pose is a frame behind; at the
-        # 55 deg/s turn into the car wash that lag froze 7 deg into the dead-reckoning.
-        stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
-        self.raw_gyro = next((g for ts, g in reversed(self.gyro_hist) if ts <= stamp),
-                             self.gyro_yaw)
         self.raw_t = t
         self.raw_hist.append((t, p.x, p.y))
         while self.raw_hist and t - self.raw_hist[0][0] > 2.0:
@@ -127,9 +119,6 @@ class OdomGuard(TTNode):
         if self.imu_t is not None and 0.0 < t - self.imu_t < 0.5:
             self.gyro_yaw += self.gyro_z * (t - self.imu_t)
         self.imu_t = t
-        self.gyro_hist.append((t, self.gyro_yaw))
-        while len(self.gyro_hist) > 100:
-            self.gyro_hist.popleft()
 
     def on_cmd(self, msg):
         moving = abs(msg.speed) >= self.cmd_min
@@ -141,7 +130,7 @@ class OdomGuard(TTNode):
 
     def on_scan(self, msg):
         t = self.now_s()
-        view = ScanView.from_msg(msg, self.yaw_off, self.flip)
+        view = self.scan_view(msg)
         r = np.asarray(view.ranges, dtype=np.float32)
         yaw = self.fused[5] if self.fused is not None else 0.0
         self.scans.append((t, r, view.angles, yaw))
@@ -177,7 +166,7 @@ class OdomGuard(TTNode):
         if (self.fused is None or abs(self.gyro_z) > 0.05
                 or max(abs(self.imu_rp[0]), abs(self.imu_rp[1])) > math.radians(3.0)):
             return
-        walls = ScanView.from_msg(msg, self.yaw_off, self.flip).lane_walls(
+        walls = self.scan_view(msg).lane_walls(
             max_half_width=1.2, x_min=-1.0, x_max=2.0)
         left, right = walls.get(1), walls.get(-1)
         if not (left and right) or min(left[2], right[2]) < 15:
@@ -234,7 +223,8 @@ class OdomGuard(TTNode):
         return math.hypot(x - old[1], y - old[2])
 
     def raw_yaw(self):
-        return self.raw[6] + (self.gyro_yaw - self.raw_gyro)
+        # Not gyro-extrapolated to 'now': that made the 3-D heading error 3-8x worse.
+        return self.raw[6]
 
     def apply_offset(self):
         ox, oy, oyaw = self.offset

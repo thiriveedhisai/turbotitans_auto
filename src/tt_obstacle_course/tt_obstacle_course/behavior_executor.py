@@ -18,7 +18,7 @@ from tt_obstacle_course.behaviors import (DONE, FAILED, RUNNING, Config, Context
                                           StuckMonitor, make_behavior)
 from tt_obstacle_course.geometry import OdomTracker
 from tt_obstacle_course.ros_common import TTNode, dumps, odom_update, run
-from tt_obstacle_course.scan_utils import ScanView
+
 
 GAIN_GROUPS = ('heading_hold', 'wall_center', 'gap_follow', 'arc_turn', 'k_turn')
 
@@ -27,7 +27,6 @@ class BehaviorExecutor(TTNode):
 
     def __init__(self):
         super().__init__('behavior_executor')
-        self.yaw_offset, self.flip = self.scan_args()
         self.cfg = Config(self.steering_model(), {g: self.group(g) for g in GAIN_GROUPS},
                           half_width=float(self.param('vehicle.width', 0.20)) / 2.0,
                           sweep_margin=float(self.param('sweep_margin', 0.15)),
@@ -79,7 +78,7 @@ class BehaviorExecutor(TTNode):
         self.get_logger().info(f'behavior <- {name} {req.get("params", {})}')
 
     def on_scan(self, msg):
-        self.scan = ScanView.from_msg(msg, self.yaw_offset, self.flip)
+        self.scan = self.scan_view(msg)
         self.scan_time = self.now_s()
 
     def on_lidar_ok(self, msg):

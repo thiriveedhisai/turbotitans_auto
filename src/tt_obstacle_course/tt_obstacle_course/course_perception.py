@@ -24,7 +24,6 @@ from std_msgs.msg import Bool
 from tt_obstacle_course.depth_check import DepthView, leg_points
 from tt_obstacle_course.geometry import OdomTracker, wrap_angle, yaw_to_quat
 from tt_obstacle_course.ros_common import TTNode, odom_update, run
-from tt_obstacle_course.scan_utils import ScanView
 
 
 class Track:
@@ -54,7 +53,6 @@ class CoursePerception(TTNode):
 
     def __init__(self):
         super().__init__('course_perception')
-        self.yaw_offset, self.flip = self.scan_args()
         self.laser_x = float(self.param('laser_offset_x', 0.0))
         self.laser_y = float(self.param('laser_offset_y', 0.0))
         width = float(self.param('vehicle.width', 0.20))
@@ -127,7 +125,7 @@ class CoursePerception(TTNode):
     def on_scan(self, msg):
         if not self.odom.valid or not self.lidar_ok:
             return
-        scan = ScanView.from_msg(msg, self.yaw_offset, self.flip)
+        scan = self.scan_view(msg)
         lo, hi, depth = self.front_gap
         found = {
             'left_gap': scan.find_side_openings(+1, self.min_gap, self.gap_depth,

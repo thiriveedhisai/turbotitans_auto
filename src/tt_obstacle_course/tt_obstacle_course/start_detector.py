@@ -1,12 +1,12 @@
-"""Start detector: waits for the pinwheel to turn green, then latches /race_start.
+"""Start detector: waits for the start light to turn green, then latches /race_start.
 
-A detection is a green blob that is round enough and within a depth window.
-With require_transition, green must appear after a period without it, so a
-green object already in view at boot does not trigger a false start.
+A detection is a green disc within a depth window: round, or (oval print, disc on a
+lollipop stick) containing a big enough inscribed circle. A red disc in view means
+STOP: it vetoes any green and the light has to be green with no red for
+confirm_frames. With require_transition, green must appear after a period without
+it, so a green object already in view at boot does not trigger a false start.
 Manual start: ros2 topic pub --once /race_start std_msgs/msg/Bool "{data: true}"
 """
-
-import math
 
 import cv2
 import numpy as np
@@ -15,6 +15,7 @@ from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
 from std_msgs.msg import Bool
 
+from tt_obstacle_course.light_blob import RED_RANGES, colour_mask, disc_centres
 from tt_obstacle_course.ros_common import LATCHED, RELIABLE_SUB, TTNode, run
 
 
@@ -22,10 +23,11 @@ class StartDetector(TTNode):
 
     def __init__(self):
         super().__init__('start_detector')
-        self.lower = np.array(self.param('hsv_lower', [40, 80, 60]), dtype=np.uint8)
-        self.upper = np.array(self.param('hsv_upper', [85, 255, 255]), dtype=np.uint8)
+        self.green = [(self.param('hsv_lower', [40, 80, 60]), self.param('hsv_upper', [85, 255, 255]))]
+        self.red = RED_RANGES
         self.min_area = float(self.param('min_area_px', 400))
         self.min_circ = float(self.param('min_circularity', 0.6))
+        self.min_disc = float(self.param('min_disc_fraction', 0.45))
         self.dmin = float(self.param('depth_min', 0.3))
         self.dmax = float(self.param('depth_max', 4.0))
         self.confirm = int(self.param('confirm_frames', 6))
@@ -68,23 +70,10 @@ class StartDetector(TTNode):
         vals = patch[np.isfinite(patch) & (patch > 0)]
         return float(np.median(vals)) if vals.size else None
 
-    def find_green(self, bgr):
-        small = cv2.resize(bgr, None, fx=self.scale, fy=self.scale) if self.scale != 1.0 else bgr
-        hsv = cv2.cvtColor(small, cv2.COLOR_BGR2HSV)
-        mask = cv2.inRange(hsv, self.lower, self.upper)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        h, w = small.shape[:2]
+    def find_disc(self, hsv, ranges, w, h):
         min_area = self.min_area * self.scale * self.scale
-        for c in sorted(contours, key=cv2.contourArea, reverse=True):
-            area = cv2.contourArea(c)
-            if area < min_area:
-                break
-            perim = cv2.arcLength(c, True)
-            if perim <= 0 or 4.0 * math.pi * area / (perim * perim) < self.min_circ:
-                continue
-            m = cv2.moments(c)
-            d = self.depth_at(m['m10'] / m['m00'], m['m01'] / m['m00'], w, h)
+        for u, v in disc_centres(colour_mask(hsv, ranges), min_area, self.min_circ, self.min_disc):
+            d = self.depth_at(u, v, w, h)
             if d is not None and self.dmin <= d <= self.dmax:
                 return d
         return None
@@ -92,7 +81,21 @@ class StartDetector(TTNode):
     def on_image(self, msg):
         if self.started:
             return
-        d = self.find_green(self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8'))
+        bgr = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+        small = cv2.resize(bgr, None, fx=self.scale, fy=self.scale) if self.scale != 1.0 else bgr
+        hsv = cv2.cvtColor(small, cv2.COLOR_BGR2HSV)
+        h, w = small.shape[:2]
+        if self.find_disc(hsv, self.red, w, h) is not None:
+            # Red light: stay stopped, and count it as 'no green' for the transition.
+            if self.hits:
+                self.get_logger().info('Red in view: start held.')
+            self.hits = 0
+            self.absent += 1
+            if not self.armed and self.absent >= self.absent_needed:
+                self.armed = True
+                self.get_logger().info('Armed: red light, waiting for green.')
+            return
+        d = self.find_disc(hsv, self.green, w, h)
         if d is None:
             self.hits = 0
             self.absent += 1

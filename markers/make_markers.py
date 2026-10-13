@@ -6,7 +6,7 @@
 IDs/zones come from config/tuning.yaml (marker_detector.tag_ids/tag_zones), so the prints
 always match what the detector expects. Output (next to this script):
   png/tag36h11_<id>_<zone>.png  bare tag, black square only (1 px = 1 cell / 100)
-  pdf/<id>_<zone>.pdf           A3 page, black square exactly TAG_MM wide + 100 mm check bar
+  pdf/<id>_<zone>.pdf           A4 page, black square exactly TAG_MM wide + 100 mm check bar
   all_markers.pdf               every page in one file
   placement.csv                 where to stick each tag
   placement_map.png             course top view, tag ids + approach direction

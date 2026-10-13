@@ -256,6 +256,7 @@ zones:
   - name: car_wash
     speed_cap: 1.5
     timeout_s: 20
+    allow_marker_skip: false           # its tag is in view from the hoop-3 U-turn
     steps:
       - behavior: wall_center
         params: {speed: 0.7, distance: 4.0}

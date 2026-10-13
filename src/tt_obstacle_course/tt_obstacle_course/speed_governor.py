@@ -18,7 +18,7 @@ from std_msgs.msg import Bool, Float32, String
 
 from tt_obstacle_course.geometry import clamp
 from tt_obstacle_course.ros_common import TTNode, run
-from tt_obstacle_course.scan_utils import DEG, ScanView
+from tt_obstacle_course.scan_utils import DEG
 
 
 class SpeedGovernor(TTNode):
@@ -49,7 +49,6 @@ class SpeedGovernor(TTNode):
         self.timeout = float(p('cmd_timeout', 0.3))
         rate = float(p('rate_hz', 20.0))
         self.steering = self.steering_model()
-        self.yaw_offset, self.flip = self.scan_args()
 
         self.raw = AckermannDrive()
         self.raw_t = -1e9
@@ -116,7 +115,7 @@ class SpeedGovernor(TTNode):
         self.ignore_front = float(params.get('ignore_front_deg', 0.0)) * DEG
 
     def on_scan(self, msg):
-        self.scan = ScanView.from_msg(msg, self.yaw_offset, self.flip)
+        self.scan = self.scan_view(msg)
         self.scan_t = self.now_s()
 
     def limit(self, v, s, now):

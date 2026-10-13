@@ -32,7 +32,7 @@ from tt_obstacle_course.geometry import (OdomTracker, quat_to_rpy, wrap_angle,
                                          yaw_to_quat)
 from tt_obstacle_course.ros_common import RELIABLE_SUB, TTNode, dumps, odom_update
 from tt_obstacle_course.ros_common import run as run_node
-from tt_obstacle_course.scan_utils import ScanView
+
 
 TRIGGER = re.compile(r'^\s*(\w+)\s*(>=|<=|!=|=)?\s*([\w.\-]+)?\s*$')
 NO_CAP = 99.0
@@ -146,7 +146,6 @@ class MissionManager(TTNode):
         self.variables = self.compute_variables()
         # Begin at a later zone (practice a section, or resume after a reset).
         self.start_zone = str(self.param('start_zone', ''))
-        self.yaw_offset, self.flip = self.scan_args()
 
         self.odom = OdomTracker()
         self.nav = Nav2Link(self, self.param('nav2_action', 'navigate_to_pose'),
@@ -243,7 +242,7 @@ class MissionManager(TTNode):
         self.bstatus[s.get('id')] = s.get('status')
 
     def on_scan(self, msg):
-        self.scan = ScanView.from_msg(msg, self.yaw_offset, self.flip)
+        self.scan = self.scan_view(msg)
 
     @staticmethod
     def pose_of(msg):

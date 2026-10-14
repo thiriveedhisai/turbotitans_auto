@@ -27,11 +27,15 @@ hoop_lane: {connector: 0.83}
 # computed from vehicle.planning_min_turn_radius; it is 0 once R <= ~1.2 m.
 helix_entry: {centerline: 1.22, margin: 0.05, max_offset: 0.25}
 
-# Bank plane relative to the truck (centred in the entry lane) when the lane walls are
-# seen to end `trigger` m ahead of the lidar: plane side edges (left +) and the
-# return-lane centre 0.6 m before the plane. From the drawing; MEASURE on the course.
-bank_entry: {trigger: 1.2, lidar_behind_camera: 0.15, plane_depth: 1.219, margin: 0.15,
-             north: 0.80, south: -2.40, return_offset: -1.73}
+# Bank plane, laid out where the entry lane's walls end (lidar). Plane frame: u = into the
+# plane, v = left, origin = entry-lane mouth centre on the near edge. The entry lane runs
+# lane_angle_deg left of the plane axis and the return lane return_angle_deg (both lanes
+# splay from the divider); return_offset = return-lane centre at the edge; divider =
+# [u, v, radius] of the post between the lane mouths. From the
+# drawing; MEASURE on the course. margin: kept off the drop edges (fence).
+bank_entry: {trigger: 1.2, lidar_behind_camera: 0.15, plane_depth: 1.219, margin: 0.25,
+             north: 0.615, south: -2.635, return_offset: -1.93, lane_angle_deg: 10.1,
+             return_angle_deg: 9.4, divider: [0.0, -0.895, 0.23]}
 
 zones:
   - name: start
@@ -75,6 +79,8 @@ zones:
     timeout_s: 30
     allow_marker_skip: false     # must start exactly at the ramp-down, not early
     steps:
+      # Fixed arc. Holding a circle on odometry instead (center_left/track_radius) made the
+      # helix 2x slower and wedged in 3-D: VO is too poor on its sloped surface.
       - behavior: arc_turn
         params: {direction: left, turn_deg: 270, radius: 1.22, speed: 0.5, allow_kturn: false}
         until: [done]
@@ -138,14 +144,18 @@ zones:
         after_distance: 0.8
 
   # Right U-turn on the 8.5 deg plane (lidar blind while tilted, no walls, 7" drop at
-  # the far edge). The plane's far/side edges are fenced from the fixed plane size
-  # (relative to where the lane walls end) and Hybrid-A* plans a single sweep or a
-  # multi-point turn as the turning radius requires, ending in the return lane.
+  # the far edge). The plane's far/side edges are fenced from its fixed size, laid out
+  # from the lidar-seen entry lane, and Hybrid-A* plans the turn into the return lane.
   - name: bank_uturn
     speed_cap: 0.5
-    timeout_s: 40
+    timeout_s: 60
     allow_marker_skip: false
     steps:
+      # Hybrid-A* inside the fenced plane, laid out from the lidar-seen entry lane
+      # (bank_layout): offline 23/24 over R 0.91-1.52, 0-15 deg approach, +-7 deg
+      # odometry heading error. The fenced 3-point turn scored 7/18 and stays unused.
+      # No step timeout: cutting the planner at 20 s handed over to the arc_turn fallback
+      # mid-plane and it swept off the edge (2 flips in 3-D).
       - behavior: plan_drive
         params: {goal: $bank_goal, fence: $bank_fence, speed: 0.45, reverse_speed: 0.3,
                  goal_tol: 0.35, yaw_tol: 0.6, margin: 1.2}
@@ -158,7 +168,7 @@ zones:
 
   - name: pothole
     speed_cap: 0.7
-    timeout_s: 20
+    timeout_s: 30
     steps:
       # ~2 m of return lane to the zone line, 1.5" ramp, 8 ft of holes/bumps, ramp down.
       - behavior: wall_center
@@ -166,10 +176,11 @@ zones:
         until: [terrain=rough, distance>=2.8]
         after_distance: 1.0
       # Lane end = the south wall ends into the wide area (lidar). Odometry distance
-      # is only a backstop: with VO scale error it fired 2 m early and the left turn
-      # went into the pothole wall. Not the wide tag: it is visible ~1 m before the end.
+      # is only a far backstop: over the potholes VO overcounts, and at 5 m it ended
+      # the lane 1.5-2.8 m early in 3 of 14 3-D runs (the wide turn then hit the lane
+      # wall). Not the wide tag: it is visible ~1 m before the end.
       - behavior: wall_center
-        params: {speed: 0.6, distance: 5.0}
+        params: {speed: 0.6, distance: 8.0}
         until: [open_left>=1.5, done]
 
   # 11x26 ft area with decoy bales. Turn left (south), then search the LEFT
@@ -224,7 +235,7 @@ zones:
   # backing up first if too close to make the sideways shift.
   - name: hoops
     speed_cap: 0.8
-    timeout_s: 120
+    timeout_s: 160
     allow_marker_skip: false
     steps:
       # Hoops are taken in order: the next one must lie 1 m..max_ahead beyond the last
@@ -246,13 +257,22 @@ zones:
                max_angle_deg: 70, max_range: 4.0, expect: {max_ahead: 5.5, yaw_deg: -90},
                exit_goal: {name: wash_entry, forward: 0.25, left: -3.4, yaw_deg: -90}}
       # A fixed 90 deg arc at 5 ft ended 2 m south of the lane mouth, in the bowl corner:
-      # plan (forward/reverse) to the funnel instead; the arc only if that fails.
+      # plan (forward/reverse) to the funnel instead.
       - behavior: plan_drive
         params: {goal: $wash_entry, speed: 0.5, goal_tol: 0.35, yaw_tol: 0.4}
+      # Planner had no goal (hoop 3 not measured) or failed: drive round the U-turn bowl
+      # like a driver, a right turn holding the curved outer wall ~1 m off on the left
+      # (lidar), then centre into the wash lane until its tag at the mouth is in range.
+      # Wall tracing failed here both ways: the divider's tip and the bowl's curved
+      # outer wall don't fit a straight wall line, and the truck turned into them.
       - behavior: arc_turn
-        params: {direction: right, turn_deg: 90, radius: $turn_radius, speed: 0.5,
-                 allow_kturn: true}
+        params: {direction: right, turn_deg: 90, radius: $turn_radius, speed: 0.4,
+                 outer_wall_target: 1.0, allow_kturn: true}
         only_if_failed: true
+      - behavior: wall_center
+        params: {speed: 0.5, distance: 6.0}
+        until: [marker=car_wash, done]
+        timeout_s: 30
 
   # 48" lane under ribbons: lidar and camera see ribbons everywhere. Centre in the
   # funnel until the straight 48" lane, then hold the lane heading (90 deg right of
@@ -268,9 +288,12 @@ zones:
         params: {speed: 0.7, distance: 4.0}
         until: [corridor<=1.35, done]
         after_distance: 0.8
+      # Heading: along the lane walls in view at the start, else straight on as it stands
+      # (the step above has just centred it in the lane). Not $gate_yaw: when hoop 3 was
+      # never measured it pointed east, and the sprint steered into the lane wall.
       - behavior: heading_hold
-        params: {speed: 1.5, heading_abs: $gate_yaw, abs_offset_deg: -90, lateral_offset: 0.0,
-                 ignore_front_deg: 60, distance: 12.0}
+        params: {speed: 1.5, lateral_offset: 0.0,
+                 heading_from_walls: true, ignore_front_deg: 60, distance: 12.0}
         until: [finish_funnel<=1.6, done]
         after_distance: 2.0
 

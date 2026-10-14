@@ -81,6 +81,8 @@ def _setup(context):
         launch_arguments={'sensors': 'false', 'camera_nodes': 'true', 'motor': 'false',
                           'use_sim_time': 'true', 'use_nav2': lc('use_nav2'),
                           'turn_radius': str(radius), 'start_zone': start_zone,
+                          'map': lc('map'), 'map_correct': lc('map_correct'),
+                          'dash': lc('dash'), 'maps_dir': lc('maps_dir'), 'hw_estop': 'false',
                           'tuning': tuning}.items())
     stop = [RegisterEventHandler(OnProcessExit(target_action=a, on_exit=[EmitEvent(event=Shutdown())]))
             for a in (referee, gz)]
@@ -106,5 +108,9 @@ def generate_launch_description():
         DeclareLaunchArgument('timeout', default_value='600.0'),
         DeclareLaunchArgument('output_dir', default_value='/tmp/tt_gz_run'),
         DeclareLaunchArgument('tuning', default_value=''),
+        DeclareLaunchArgument('map', default_value=''),
+        DeclareLaunchArgument('map_correct', default_value='true'),
+        DeclareLaunchArgument('dash', default_value='false'),
+        DeclareLaunchArgument('maps_dir', default_value=''),
         OpaqueFunction(function=_setup),
     ])

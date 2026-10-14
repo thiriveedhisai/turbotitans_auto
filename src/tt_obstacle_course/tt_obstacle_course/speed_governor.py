@@ -6,6 +6,8 @@
   * front/rear collision slow-down and stop from the lidar (distances measured
     from the lidar centre), with optional front blind zone for the car wash
   * acceleration and steering-rate limits, e-stop
+  * /teleop_cmd (tt_dash drive panel, keyboard teleop) overrides the stack while it keeps
+    arriving; every limit above except the zone caps still applies
 """
 
 import json
@@ -66,10 +68,25 @@ class SpeedGovernor(TTNode):
 
         self.pub = self.create_publisher(AckermannDrive, '/ackermann_cmd', 10)
         self.create_subscription(AckermannDrive, '/ackermann_cmd_raw', self.on_raw, 10)
+        self.teleop = AckermannDrive()
+        self.teleop_t = -1e9
+        self.teleop_max = float(p('teleop_max_speed', 1.0))
+        self.manual = False
+        self.create_subscription(AckermannDrive, '/teleop_cmd', self.on_teleop, 10)
         self.create_subscription(Float32, '/terrain/speed_cap', self.on_terrain_cap, 10)
         self.create_subscription(Float32, '/mission/speed_cap', self.on_mission_cap, 10)
         self.create_subscription(Bool, '/terrain/lidar_ok', self.on_lidar_ok, 10)
         self.create_subscription(Bool, '/estop', self.on_estop, 10)
+        # Hardware e-stop (estop_bridge). Required: no message within hw_estop_stale_s = stop.
+        # Latched once it goes RUN -> STOP; cleared by /estop false (dashboard Release) when RUN again.
+        self.hw_required = bool(p('hw_estop_required', False))
+        self.hw_latch = bool(p('hw_estop_latch', True))
+        self.hw_stale = float(p('hw_estop_stale_s', 1.0))
+        self.hw_stop = True
+        self.hw_t = -1e9
+        self.hw_seen_run = False
+        self.hw_latched = False
+        self.create_subscription(Bool, '/estop/hw', self.on_hw_estop, 10)
         self.create_subscription(Bool, '/odom/degraded', self.on_degraded, 10)
         self.terrain = 'flat'
         self.create_subscription(String, '/terrain/state',
@@ -84,6 +101,11 @@ class SpeedGovernor(TTNode):
 
     def on_raw(self, msg):
         self.raw, self.raw_t = msg, self.now_s()
+
+    def on_teleop(self, msg):
+        if self.now_s() - self.teleop_t > 1.0:
+            self.get_logger().warn('teleop: manual control')
+        self.teleop, self.teleop_t = msg, self.now_s()
 
     def on_terrain_cap(self, msg):
         self.terrain_cap = msg.data
@@ -107,6 +129,27 @@ class SpeedGovernor(TTNode):
         if msg.data and not self.estop:
             self.get_logger().warn('E-STOP')
         self.estop = msg.data
+        if not msg.data and self.hw_latched:
+            if self.hw_stop:
+                self.get_logger().warn('E-STOP: hardware button still at STOP, not released')
+            else:
+                self.hw_latched = False
+                self.get_logger().warn('E-STOP: hardware latch released')
+
+    def on_hw_estop(self, msg):
+        self.hw_t = self.now_s()
+        if msg.data and not self.hw_stop and self.hw_seen_run and self.hw_latch:
+            self.hw_latched = True
+            self.get_logger().warn('E-STOP: hardware STOP latched (Release on the dashboard to clear)')
+        self.hw_seen_run = self.hw_seen_run or not msg.data
+        self.hw_stop = msg.data
+
+    def stopped(self, now):
+        if self.estop or self.hw_latched:
+            return True
+        if now - self.hw_t > self.hw_stale:
+            return self.hw_required
+        return self.hw_stop
 
     def on_behavior(self, msg):
         try:
@@ -119,8 +162,11 @@ class SpeedGovernor(TTNode):
         self.scan = self.scan_view(msg)
         self.scan_t = self.now_s()
 
-    def limit(self, v, s, now):
+    def limit(self, v, s, now, manual=False):
         cap = min(self.max_speed * self.scale, self.mission_cap * self.scale, self.terrain_cap)
+        if manual:
+            # No mission cap: before the race start it is 0.
+            cap = min(self.max_speed, self.teleop_max, self.terrain_cap)
         # Not while climbing: tracking drops when nose-up at the crest, and the cap then
         # held a low-friction stall below the speed needed to get over.
         if self.degraded and self.terrain not in ('ramp_up', 'bank'):
@@ -163,14 +209,20 @@ class SpeedGovernor(TTNode):
 
     def tick(self):
         now = self.now_s()
-        if self.estop or now - self.raw_t > self.timeout:
+        manual = now - self.teleop_t <= self.timeout
+        if self.manual and not manual:
+            self.get_logger().warn('teleop: released, stack in control')
+        self.manual = manual
+        cmd, cmd_t = (self.teleop, self.teleop_t) if manual else (self.raw, self.raw_t)
+        estop = self.stopped(now)
+        if estop or now - cmd_t > self.timeout:
             v_target, s_target = 0.0, self.out_s
         else:
-            v_target = self.limit(self.raw.speed, self.raw.steering_angle, now)
-            s_target = self.raw.steering_angle
+            v_target = self.limit(cmd.speed, cmd.steering_angle, now, manual)
+            s_target = cmd.steering_angle
         speeding_up = abs(v_target) > abs(self.out_v) and v_target * self.out_v >= 0
         lim = (self.max_accel if speeding_up else self.max_decel) * self.dt
-        self.out_v = 0.0 if self.estop else self.out_v + clamp(v_target - self.out_v, -lim, lim)
+        self.out_v = 0.0 if estop else self.out_v + clamp(v_target - self.out_v, -lim, lim)
         self.out_s += clamp(s_target - self.out_s, -self.steer_rate * self.dt, self.steer_rate * self.dt)
         self.pub.publish(AckermannDrive(speed=float(self.out_v), steering_angle=float(self.out_s)))
 

@@ -8,6 +8,8 @@ Start manually (skips the green detector):
   ros2 topic pub --once /race_start std_msgs/msg/Bool "{data: true}"
 E-stop:
   ros2 topic pub --once /estop std_msgs/msg/Bool "{data: true}"
+Hardware e-stop (ESP8266 -> mosquitto esp/trigger) is required by default; without it
+the truck will not move. Bench work without the ESP: hw_estop:=false
 """
 
 from launch import LaunchDescription
@@ -34,6 +36,19 @@ def generate_launch_description():
         DeclareLaunchArgument('use_nav2', default_value='false'),
         DeclareLaunchArgument('start_zone', default_value='',
                               description='Begin the mission at this zone (practice)'),
+        DeclareLaunchArgument('map', default_value='',
+                              description='Course map dir from tt_map (empty = no map localization)'),
+        DeclareLaunchArgument('map_correct', default_value='true',
+                              description='With map:=, correct /odom/fused onto the map '
+                                          '(false = only localize and report)'),
+        DeclareLaunchArgument('dash', default_value='false',
+                              description='Start tt_dash with Drive panel, E-STOP and map making '
+                                          '(http://<truck-ip>:8080)'),
+        DeclareLaunchArgument('maps_dir', default_value='',
+                              description='Where the dashboard saves new maps (default <workspace>/maps)'),
+        DeclareLaunchArgument('hw_estop', default_value='true',
+                              description='Start estop_bridge (MQTT esp/trigger) and refuse to drive '
+                                          'without its RUN heartbeat'),
         DeclareLaunchArgument('sensors', default_value='true', description='Start ZED and lidar drivers'),
         DeclareLaunchArgument('camera_nodes', default_value='true',
                               description='Start start_detector and marker_detector'),
@@ -90,15 +105,21 @@ def _stack_and_nav2(context):
                     parameters=[tuning, *ours, *extra], condition=condition)
 
     cameras = IfCondition(LaunchConfiguration('camera_nodes'))
+    map_dir = LaunchConfiguration('map').perform(context).strip()
+    use_map = bool(map_dir)
+    correct = use_map and LaunchConfiguration('map_correct').perform(context) == 'true'
+    hw_estop = LaunchConfiguration('hw_estop').perform(context) == 'true'
     stack = [
-        tt('odom_guard'),
+        *([tt('estop_bridge')] if hw_estop else []),
+        tt('odom_guard', [{'map_correction': correct}]),
+        *([tt('map_localizer', [{'map_file': map_dir}])] if use_map else []),
         tt('terrain_monitor'),
         tt('start_detector', condition=cameras),
         tt('marker_detector', condition=cameras),
         tt('course_perception'),
         tt('behavior_executor'),
         tt('twist_to_ackermann'),
-        tt('speed_governor'),
+        tt('speed_governor', [{'hw_estop_required': hw_estop}]),
         tt('mission_manager', [{'mission_file': LaunchConfiguration('mission'), 'use_nav2': use_nav2,
                                 'start_zone': LaunchConfiguration('start_zone')}]),
     ]
@@ -118,10 +139,16 @@ def _stack_and_nav2(context):
              name='lifecycle_manager_navigation', output='screen',
              parameters=[nav2_params, *sim_time]),
     ])
+    dash = []
+    if LaunchConfiguration('dash').perform(context) == 'true':
+        maps_dir = LaunchConfiguration('maps_dir').perform(context).strip()
+        dash.append(Node(package='tt_obstacle_course', executable='tt_dash', name='tt_dash',
+                         output='screen', parameters=sim_time,
+                         arguments=['--control'] + (['--maps-dir', maps_dir] if maps_dir else [])))
     laser_tf = Node(
         package='tf2_ros', executable='static_transform_publisher', name='laser_tf',
         parameters=sim_time,
         arguments=['--x', LaunchConfiguration('laser_x'), '--y', LaunchConfiguration('laser_y'),
                    '--z', LaunchConfiguration('laser_z'), '--yaw', LaunchConfiguration('laser_yaw'),
                    '--frame-id', 'zed_camera_link', '--child-frame-id', 'laser'])
-    return [laser_tf, *stack, nav2]
+    return [laser_tf, *stack, nav2, *dash]

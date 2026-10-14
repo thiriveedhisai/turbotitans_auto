@@ -10,8 +10,10 @@ the commanded speed. Measured ~0 (e.g. pushing against a wall) stops the estimat
 stuck recovery still works. When the ZED recovers, its pose is re-anchored to the
 dead-reckoned one (no jump).
 
-Subscribes: zed_odom_topic, imu_topic, /ackermann_cmd, scan_topic
-Publishes:  /odom/fused (Odometry, used by the stack), /odom/degraded (Bool),
+Subscribes: zed_odom_topic, imu_topic, /ackermann_cmd, scan_topic,
+            /localization/correction (map_localizer, only with map_correction: true)
+Publishes:  /odom/fused (Odometry, used by the stack; map-corrected when enabled),
+            /odom/local (the same without map correction), /odom/degraded (Bool),
             TF odom -> zed_camera_link (the ZED wrapper's own TF is disabled)
 """
 
@@ -47,6 +49,8 @@ class OdomGuard(TTNode):
         self.scan_dt = float(g('scan_compare_s', 0.5))
         self.scan_delta = float(g('scan_change_m', 0.04))
         self.scan_frac = float(g('scan_moving_fraction', 0.03))
+        # Measured with the dashboard's odometry check (true distance / ZED distance).
+        self.odom_scale = float(g('odom_scale', 1.0))
         # Heading aid: the course is rectilinear, so straight parallel lane walls give the
         # true heading modulo 90 deg; pull the yaw onto that grid (position untouched).
         self.wall_tol = math.radians(float(g('wall_heading_tol_deg', 8.0)))
@@ -78,6 +82,7 @@ class OdomGuard(TTNode):
         self.last_t = None
 
         self.pub = self.create_publisher(Odometry, '/odom/fused', 10)
+        self.pub_local = self.create_publisher(Odometry, '/odom/local', 10)
         self.pub_flag = self.create_publisher(Bool, '/odom/degraded', 10)
         self.tf = TransformBroadcaster(self)
         self.create_subscription(Odometry, self.param('zed_odom_topic', '/zed/zed_node/odom'),
@@ -91,6 +96,24 @@ class OdomGuard(TTNode):
         self.tag_tol = math.radians(float(g('tag_heading_tol_deg', 15.0)))
         self.tag_range = float(g('tag_heading_max_range', 2.5))
         self.create_subscription(String, '/marker/detections', self.on_tags, 10)
+        # Map correction: /odom/fused = map_off o local. Rate-limited so goals the mission set
+        # a moment ago stay where they were meant to be; one jump allowed while standing still.
+        self.map_off = (0.0, 0.0, 0.0)
+        self.map_applied = False
+        if bool(g('map_correction', False)):
+            # Per correction: a floor plus a share of the travel since the last one, so a running
+            # maneuver sees it as ordinary odometry error (0.3 m/s of frame shift during the
+            # bank plan moved its fence and drove the truck off the plane in 3-D).
+            self.map_step_m = float(g('map_max_step_m', 0.005))
+            self.map_step_frac = float(g('map_step_per_m', 0.2))
+            self.map_step_yaw = math.radians(float(g('map_max_step_deg', 0.1)))
+            self.map_gain = float(g('map_gain', 0.3))
+            # Lane geometry is weakest where the map pose slid 0.5-0.7 m, and plans are fenced.
+            self.map_freeze = set(g('map_freeze_zones', ['bank_approach', 'bank_uturn']))
+            self.mission_zone = None
+            self.map_last = None
+            self.create_subscription(String, '/localization/correction', self.on_map, 10)
+            self.create_subscription(String, '/mission/state', self.on_mission, 10)
         self.create_timer(1.0 / 30.0, self.tick)
         self.create_timer(0.1, lambda: self.pub_flag.publish(Bool(data=self.degraded)))
 
@@ -99,14 +122,16 @@ class OdomGuard(TTNode):
         p, q = msg.pose.pose.position, msg.pose.pose.orientation
         roll, pitch, yaw = quat_to_rpy(q.x, q.y, q.z, q.w)
         t = self.now_s()
-        self.raw_speed = msg.twist.twist.linear.x
-        self.raw = (t, p.x, p.y, p.z, roll, pitch, yaw)
+        k = self.odom_scale
+        px, py, pz = p.x * k, p.y * k, p.z * k
+        self.raw_speed = msg.twist.twist.linear.x * k
+        self.raw = (t, px, py, pz, roll, pitch, yaw)
         self.raw_t = t
-        self.raw_hist.append((t, p.x, p.y))
+        self.raw_hist.append((t, px, py))
         while self.raw_hist and t - self.raw_hist[0][0] > 2.0:
             self.raw_hist.popleft()
         if self.fused is None:
-            self.fused = [p.x, p.y, p.z, roll, pitch, yaw]
+            self.fused = [px, py, pz, roll, pitch, yaw]
 
     def on_imu(self, msg):
         q = msg.orientation
@@ -215,6 +240,55 @@ class OdomGuard(TTNode):
                 self.reanchor()
 
     # ------------------------------------------------------------ logic
+    def on_mission(self, msg):
+        try:
+            self.mission_zone = json.loads(msg.data).get('zone')
+        except ValueError:
+            pass
+
+    def on_map(self, msg):
+        if self.fused is None:
+            return
+        try:
+            d = json.loads(msg.data)
+            lx, ly, lyaw = d['local']
+            mx, my, myaw = d['map']
+        except (ValueError, KeyError, TypeError):
+            return
+        x, y, yaw = self.fused[0], self.fused[1], self.fused[5]
+        moved, turned = 0.0, 0.0
+        if self.map_last is not None:
+            moved = math.hypot(x - self.map_last[0], y - self.map_last[1])
+            turned = abs(wrap_angle(yaw - self.map_last[2]))
+        self.map_last = (x, y, yaw)
+        if self.map_applied and self.mission_zone in self.map_freeze:
+            return
+        # Target offset from this match, applied to where we are now.
+        tyaw = wrap_angle(myaw - lyaw)
+        c, s = math.cos(tyaw), math.sin(tyaw)
+        target = (mx - (c * lx - s * ly), my - (s * lx + c * ly), tyaw)
+        cur = se2(self.map_off, (x, y, yaw))
+        want = se2(target, (x, y, yaw))
+        still = self.cmd_since is None and abs(self.raw_speed) < 0.05
+        if not self.map_applied and still:
+            new = want
+            self.get_logger().info(f'map frame locked: {math.hypot(want[0] - cur[0], want[1] - cur[1]):.2f} m, '
+                                   f'{math.degrees(wrap_angle(want[2] - cur[2])):+.1f} deg')
+        else:
+            dx, dy = (want[0] - cur[0]) * self.map_gain, (want[1] - cur[1]) * self.map_gain
+            n = math.hypot(dx, dy)
+            cap = self.map_step_m + self.map_step_frac * moved
+            if n > cap:
+                dx, dy = dx * cap / n, dy * cap / n
+            ycap = self.map_step_yaw + self.map_step_frac * turned
+            dyaw = max(-ycap, min(ycap, wrap_angle(want[2] - cur[2]) * self.map_gain))
+            new = (cur[0] + dx, cur[1] + dy, wrap_angle(cur[2] + dyaw))
+        self.map_applied = True
+        # map_off = new o local^-1
+        oyaw = wrap_angle(new[2] - yaw)
+        c, s = math.cos(oyaw), math.sin(oyaw)
+        self.map_off = (new[0] - (c * x - s * y), new[1] - (s * x + c * y), oyaw)
+
     def raw_moved(self, window):
         if not self.raw_hist:
             return 0.0
@@ -291,9 +365,23 @@ class OdomGuard(TTNode):
         self.distance_dr += abs(v) * dt
 
     def publish(self):
-        x, y, z, roll, pitch, yaw = self.fused
+        lx, ly, z, roll, pitch, lyaw = self.fused
+        stamp = self.get_clock().now().to_msg()
+        local = self.odom_msg(stamp, lx, ly, z, roll, pitch, lyaw)
+        self.pub_local.publish(local)
+        x, y, yaw = se2(self.map_off, (lx, ly, lyaw))
+        out = self.odom_msg(stamp, x, y, z, roll, pitch, yaw)
+        self.pub.publish(out)
+        tf = TransformStamped()
+        tf.header = out.header
+        tf.child_frame_id = out.child_frame_id
+        tf.transform.translation.x, tf.transform.translation.y, tf.transform.translation.z = x, y, z
+        tf.transform.rotation = out.pose.pose.orientation
+        self.tf.sendTransform(tf)
+
+    def odom_msg(self, stamp, x, y, z, roll, pitch, yaw):
         out = Odometry()
-        out.header.stamp = self.get_clock().now().to_msg()
+        out.header.stamp = stamp
         out.header.frame_id = 'odom'
         out.child_frame_id = 'zed_camera_link'
         out.pose.pose.position.x, out.pose.pose.position.y, out.pose.pose.position.z = x, y, z
@@ -306,13 +394,12 @@ class OdomGuard(TTNode):
         o.y = cr * sp * cy + sr * cp * sy
         o.z = cr * cp * sy - sr * sp * cy
         out.twist.twist.linear.x = float(self.dr_speed if self.degraded else self.raw_speed)
-        self.pub.publish(out)
-        tf = TransformStamped()
-        tf.header = out.header
-        tf.child_frame_id = out.child_frame_id
-        tf.transform.translation.x, tf.transform.translation.y, tf.transform.translation.z = x, y, z
-        tf.transform.rotation = o
-        self.tf.sendTransform(tf)
+        return out
+
+
+def se2(a, b):
+    c, s = math.cos(a[2]), math.sin(a[2])
+    return (a[0] + c * b[0] - s * b[1], a[1] + s * b[0] + c * b[1], wrap_angle(a[2] + b[2]))
 
 
 def main(args=None):

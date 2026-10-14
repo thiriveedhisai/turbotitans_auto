@@ -138,7 +138,9 @@ class HeadingHold(Behavior):
     params: speed, heading_offset_deg | heading_abs (+ abs_offset_deg), center_gain,
             center_max_width, distance, lateral_offset (m, + left of the start
             line), line_point [x, y] (follow the line through this odom point
-            instead), past_point (done once this far past line_point)
+            instead), past_point (done once this far past line_point),
+            heading_from_walls (take the heading along the lane walls seen at start,
+            heading_abs only if none are seen)
     """
     name = 'heading_hold'
 
@@ -149,6 +151,14 @@ class HeadingHold(Behavior):
                                      + float(self.p.get('abs_offset_deg', 0.0)) * DEG)
         else:
             self.target = wrap_angle(ctx.odom.yaw + float(self.p.get('heading_offset_deg', 0.0)) * DEG)
+        if self.p.get('heading_from_walls') and ctx.lidar_ok and ctx.scan is not None:
+            # Odometry heading drifted 12-30 deg by the car wash; the walls in view don't.
+            walls = ctx.scan.lane_walls(max_half_width=float(self.p.get('wall_max', 1.2)))
+            slopes = [w[1] for w in walls.values() if w is not None and w[2] >= 4]
+            if slopes:
+                axis = math.atan(sum(slopes) / len(slopes))
+                if abs(axis) < 35 * DEG:
+                    self.target = wrap_angle(ctx.odom.yaw + axis)
         self.origin = (ctx.odom.x, ctx.odom.y)
         if 'line_point' in self.p:
             # Follow an absolute line (e.g. through a hoop centre) instead of the start pose.
@@ -254,6 +264,10 @@ class WallCenter(Behavior):
     def light_kappa(self, ctx):
         """Pursuit toward a point 1.5 m out along the camera bearing of the bright exit."""
         if ctx.light_bearing is None or float(self.p.get('light_weight', 0.0)) <= 0.0:
+            return None
+        # A tunnel exit is roughly ahead; a bright patch far off to the side (sky over the
+        # helix wall while wedged at its exit) turned the truck 85 deg away from the tunnel.
+        if abs(ctx.light_bearing) > float(self.p.get('light_max_deg', 25.0)) * DEG:
             return None
         d = 1.5
         dx = self.cfg.axle_back + self.cfg.camera_ahead + d * math.cos(ctx.light_bearing)
@@ -701,7 +715,9 @@ class WallTrace(Behavior):
 
     params: side (left|right), speed, wall_target, max_wall, seek_deg, need,
             max_turn_deg, distance, heading_abs (search axis; default: start heading
-            snapped to the course grid)
+            snapped to the course grid), follow_axis (contour mode: the axis is the
+            current heading, so with no wall in reach it keeps turning toward its side,
+            round a tip or hairpin, and there is no heading limit)
     """
     name = 'wall_trace'
     self_recovers = True       # boxed in: reverse swinging the nose to the open side
@@ -737,6 +753,8 @@ class WallTrace(Behavior):
         status = DONE if self.distance_done(ctx) else RUNNING
         side = _direction(self.p.get('side', 'left'))
         k_max = self.cfg.steering.max_curvature
+        if self.p.get('follow_axis'):
+            self.axis = ctx.odom.yaw
         if self.reverse_from is not None:
             # Reverse at the lock that swings the nose toward the more open side.
             back = ctx.odom.distance - self.reverse_from
@@ -791,6 +809,117 @@ class WallTrace(Behavior):
         return Command(0.0, self.steer_for(-self.nose * k_max), RUNNING, 'blocked: reversing')
 
 
+class FencedKTurn(Behavior):
+    """Turn around inside a fenced area the way a driver does a 3-point turn: full lock
+    forward until the front gets near the edge, opposite lock in reverse until the back
+    gets near it, repeat until facing `heading_abs`. Each leg ends on the edge (odometry
+    against the fence, lidar too when usable), not on a precomputed path, so lagging
+    steering can't carry it over a drop the lidar can't see.
+
+    params: fence [[x1, y1, x2, y2], ...] (odom), rear_fence (same, only checked while
+            reversing: e.g. the lane mouth the truck came in through), heading_abs,
+            direction (left|right), aim_point [x, y] (turn until pointing at it, as a driver
+            turns until facing the exit lane; heading_abs then only a fallback),
+            speed, reverse_speed, margin (m kept off the fence), lookahead (m),
+            max_reverse (m per leg), heading_tol_deg, max_legs,
+            enter_line [x1, y1, x2, y2] + enter_axis (rad) + enter_past (m): first drive
+            square into the area until the rear bumper is that far past the line, so the
+            first full-lock leg doesn't clip the lane mouth
+    """
+    name = 'fenced_kturn'
+    self_recovers = True
+
+    def start(self, ctx):
+        super().start(ctx)
+        self.side = _direction(self.p.get('direction', 'right'))
+        self.forward = True
+        self.leg_start = ctx.odom.distance
+        self.legs = 1
+        self.fence = [tuple(float(v) for v in s) for s in self.p.get('fence', [])]
+        self.rear_fence = self.fence + [tuple(float(v) for v in s)
+                                        for s in self.p.get('rear_fence', [])]
+        self.entering = 'enter_line' in self.p
+
+    def past_line(self, ctx):
+        x1, y1 = (float(v) for v in self.p['enter_line'][:2])
+        a = float(self.p['enter_axis'])
+        o = ctx.odom
+        rear = self.corners(o.x, o.y, o.yaw)[-2:]
+        return min((px - x1) * math.cos(a) + (py - y1) * math.sin(a) for px, py in rear)
+
+    def corners(self, x, y, yaw, front=None):
+        """Outline points (odom) of the truck whose odometry point is at (x, y, yaw): both
+        ends and along both sides. Whole outline on every leg: turning, the tail swings
+        out (it clipped the divider post going forward)."""
+        f, r = self.cfg.odom_to_front, -self.cfg.odom_to_rear
+        c, s = math.cos(yaw), math.sin(yaw)
+        hw = self.cfg.half_width
+        return [(x + c * u - s * v, y + s * u + c * v)
+                for u in (f, f + (r - f) / 3.0, f + 2 * (r - f) / 3.0, r) for v in (hw, -hw)]
+
+    def fence_dist(self, pts, fence=None):
+        best = math.inf
+        for x1, y1, x2, y2 in (self.fence if fence is None else fence):
+            dx, dy = x2 - x1, y2 - y1
+            ll = dx * dx + dy * dy
+            for px, py in pts:
+                t = 0.0 if ll == 0 else max(0.0, min(1.0, ((px - x1) * dx + (py - y1) * dy) / ll))
+                best = min(best, math.hypot(px - (x1 + t * dx), py - (y1 + t * dy)))
+        return best
+
+    def ahead(self, ctx, ds, kappa):
+        """Pose after driving ds (signed) on curvature kappa; the arc turns about the rear
+        axle, so the odometry point (camera) is approximated by the same arc."""
+        o = ctx.odom
+        dyaw = ds * kappa
+        mid = o.yaw + dyaw / 2.0
+        return o.x + ds * math.cos(mid), o.y + ds * math.sin(mid), o.yaw + dyaw
+
+    def step(self, ctx, dt):
+        k_max = self.cfg.steering.max_curvature
+        target = float(self.p['heading_abs'])
+        if 'aim_point' in self.p:
+            ax, ay = (float(v) for v in self.p['aim_point'])
+            target = math.atan2(ay - ctx.odom.y, ax - ctx.odom.x)
+        tol = float(self.p.get('heading_tol_deg', 20.0)) * DEG
+        if not self.entering and abs(wrap_angle(target - ctx.odom.yaw)) <= tol:
+            return Command(0.0, 0.0, DONE, f'facing target after {self.legs} legs')
+        if self.legs > int(self.p.get('max_legs', 9)):
+            return Command(0.0, 0.0, FAILED, 'too many legs')
+        margin = float(self.p.get('margin', 0.12))
+        look = float(self.p.get('lookahead', 0.12))
+        lidar = ctx.lidar_ok and ctx.scan is not None
+        if self.entering:
+            front_near = self.fence_dist(self.corners(*self.ahead(ctx, look, 0.0))) < margin
+            if self.past_line(ctx) >= float(self.p.get('enter_past', 0.05)) or front_near:
+                self.entering = False
+                self.leg_start = ctx.odom.distance
+            else:
+                err = wrap_angle(float(self.p['enter_axis']) - ctx.odom.yaw)
+                return Command(float(self.p.get('speed', 0.35)), self.steer_for(2.0 * err),
+                               RUNNING, 'entering square')
+        if self.forward:
+            kappa = self.side * k_max
+            pose = self.ahead(ctx, look, kappa)
+            near_edge = self.fence_dist(self.corners(*pose)) < margin
+            blocked = lidar and self.cfg.front(ctx.scan) < self.cfg.front_overhang + 0.12
+            if (near_edge or blocked) and ctx.odom.distance - self.leg_start > 0.05:
+                self.forward, self.leg_start, self.legs = False, ctx.odom.distance, self.legs + 1
+                return Command(0.0, self.steer_for(-kappa), RUNNING, 'edge ahead: reverse')
+            return Command(float(self.p.get('speed', 0.35)), self.steer_for(kappa), RUNNING,
+                           f'leg {self.legs} forward')
+        kappa = -self.side * k_max
+        pose = self.ahead(ctx, -look, kappa)
+        near_edge = self.fence_dist(self.corners(*pose), self.rear_fence) < margin
+        blocked = lidar and self.cfg.rear(ctx.scan) < self.cfg.rear_overhang + 0.12
+        far = ctx.odom.distance - self.leg_start > float(self.p.get('max_reverse', 0.8))
+        if (near_edge or blocked or far) and ctx.odom.distance - self.leg_start > 0.05:
+            self.forward, self.leg_start, self.legs = True, ctx.odom.distance, self.legs + 1
+            return Command(0.0, self.steer_for(-kappa), RUNNING, 'edge behind: forward')
+        return Command(-abs(float(self.p.get('reverse_speed', 0.3))), self.steer_for(kappa),
+                       RUNNING, f'leg {self.legs} reverse')
+
+
 class BackOff(Behavior):
     """Reverse for a distance (stuck recovery), optionally with a steering angle. If the
     rear is blocked before it has moved, it tries the opposite steer once."""
@@ -810,7 +939,8 @@ class BackOff(Behavior):
 
 
 REGISTRY = {cls.name: cls for cls in
-            (Hold, HeadingHold, WallCenter, WallTrace, GapFollow, KTurn, ArcTurn, PlanDrive, BackOff)}
+            (Hold, HeadingHold, WallCenter, WallTrace, GapFollow, KTurn, ArcTurn, PlanDrive,
+             FencedKTurn, BackOff)}
 
 
 def make_behavior(name, params, cfg):

@@ -28,6 +28,7 @@ from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Bool, Float32, String
 
+from tt_obstacle_course.bank_layout import bank_layout
 from tt_obstacle_course.geometry import (OdomTracker, quat_to_rpy, wrap_angle,
                                          yaw_to_quat)
 from tt_obstacle_course.ros_common import RELIABLE_SUB, TTNode, dumps, odom_update
@@ -359,20 +360,16 @@ class MissionManager(TTNode):
 
     def set_bank_frame(self, wall_end):
         """The lane walls end at the bank plane's near edge, `wall_end` ahead of the lidar.
-        From the fixed plane size, fence its far and side edges (drop-offs the lidar can't
-        see) and set a goal in the return lane, for the U-turn planner."""
-        b = self.mission.get('bank_entry', {})
+        Lay the plane out from the lane as the lidar sees it (bank_layout) and set the fence,
+        entry line and return goal for the U-turn."""
         o = self.odom
-        c, s = math.cos(o.yaw), math.sin(o.yaw)
-        w = lambda u, v: [o.x + c * u - s * v, o.y + s * u + c * v]  # noqa: E731
-        near = wall_end - float(b.get('lidar_behind_camera', 0.15))
-        far = near + float(b.get('plane_depth', 1.219)) - float(b.get('margin', 0.15))
-        north, south = float(b.get('north', 0.80)), float(b.get('south', -2.40))
-        self.variables['bank_fence'] = [w(far, north) + w(far, south), w(near, north) + w(far, north),
-                                        w(near, south) + w(far, south)]
-        self.variables['bank_goal'] = w(near - 0.6, float(b.get('return_offset', -1.73))) + \
-            [wrap_angle(o.yaw + math.pi)]
-        self.get_logger().info(f'bank plane edge {near:.2f} m ahead; U-turn goal {self.variables["bank_goal"]}')
+        lay = bank_layout(self.scan, (o.x, o.y, o.yaw), wall_end,
+                          self.mission.get('bank_entry', {}))
+        self.variables.update({'bank_fence': lay['fence'], 'bank_rear_fence': lay['rear_fence'],
+                               'bank_goal': lay['goal'],
+                               'bank_axis': lay['axis'], 'bank_enter_line': lay['enter_line'],
+                               'bank_return_yaw': lay['return_yaw']})
+        self.get_logger().info(f'bank plane edge {wall_end:.2f} m ahead: {lay["info"]}')
 
     def square(self, yaw):
         """Snap a measured lane axis to the rectilinear course grid (odom heading is kept
@@ -843,6 +840,16 @@ class MissionManager(TTNode):
             self.get_logger().info(f'gate rejected: {why}')
         return None
 
+    def flank_axis(self, gx, gy, gyaw):
+        """Odom-frame direction of the bales flanking the hoop at (gx, gy), from the scan."""
+        if self.scan is None or not self.lidar_ok:
+            return None
+        fx, fy = self.odom.to_robot(gx, gy)
+        lx = fx - float(self.param('laser_offset_x', -0.15))
+        ly = fy - float(self.param('laser_offset_y', 0.0))
+        ang = self.scan.flank_axis(lx, ly, wrap_angle(gyaw - self.odom.yaw))
+        return None if ang is None else wrap_angle(ang + self.odom.yaw)
+
     def next_gate(self, run, spec):
         if self.gate is None:
             return None
@@ -865,7 +872,16 @@ class MissionManager(TTNode):
             # Hoops stand square to their lane: a pair whose axis disagrees is a mis-pairing
             # (one leg + a stray return, seen obliquely), whose centre is off as well.
             lay = self.square(wrap_angle(oyaw + math.radians(float(expect.get('yaw_deg', 0.0)))))
-            if abs(wrap_angle(gyaw - lay)) > math.radians(float(expect.get('axis_tol_deg', 20.0))):
+            tol_axis = math.radians(float(expect.get('axis_tol_deg', 20.0)))
+            # Bales flank each hoop and run along the lane, square to the leg pair: check
+            # against them in the scan itself. Odometry heading was 26 deg off in 3-D runs
+            # and every hoop then read as tilted against the odometry lane.
+            bales = self.flank_axis(gx, gy, gyaw)
+            if bales is not None:
+                if abs(wrap_angle(gyaw - bales)) > tol_axis:
+                    return self.reject(f'axis {math.degrees(wrap_angle(gyaw - bales)):.0f} deg vs bales')
+                lay = bales
+            elif abs(wrap_angle(gyaw - lay)) > tol_axis:
                 return self.reject(f'axis {math.degrees(wrap_angle(gyaw - lay)):.0f} deg vs lane')
             # A hoop the depth image confirmed is taken as sensed: only its crossing
             # direction is checked, not where odometry says it should be.

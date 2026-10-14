@@ -73,10 +73,24 @@ speed_governor:
     ttc_brake_s: 0.6
     crawl_speed: 0.15
     degraded_speed_cap: 0.4            # while odom_guard is dead-reckoning a ZED dropout
+    teleop_max_speed: 1.0              # tt_dash Drive panel / keyboard teleop on /teleop_cmd
+    # hw_estop_required is set by the launch arg hw_estop (default true on the truck).
+    hw_estop_latch: true               # RUN->STOP latches; clear with dashboard Release
+    hw_estop_stale_s: 1.0              # no /estop/hw this long = stop (when required)
+
+# ------------------------------------------------ hardware e-stop (ESP8266 over MQTT)
+estop_bridge:
+  ros__parameters:
+    mqtt_host: localhost               # mosquitto on the Jetson
+    mqtt_port: 1883
+    mqtt_topic: esp/trigger            # {"heartbeat": int, "pin_state": int}
+    heartbeat_timeout: 2.5             # s without a message = STOP
+    stop_pin_state: 0                  # pin_state value that means STOP (check on the bench)
 
 # ------------------------------------------------ ZED tracking-dropout handling
 odom_guard:
   ros__parameters:
+    odom_scale: 1.0                    # MEASURE with tt_dash "Odometry check": true / ZED distance
     zed_odom_topic: "/zed/zed_node/odom"
     freeze_s: 0.5                      # commanded + scene moving but ZED still this long -> dropout
     stale_s: 0.3                       # or no ZED message this long

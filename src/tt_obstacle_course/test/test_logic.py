@@ -293,6 +293,23 @@ def test_side_opening_found_and_decoy_notch_rejected():
     assert decoy.find_side_openings(+1, min_width=0.45, depth_beyond=1.5) == []
 
 
+def test_hoop_axis_from_flanking_bales():
+    # 72" lane, bales along it, hoop legs 0.6 m apart 1.5 m ahead; the whole scene turned
+    # 25 deg (odometry heading 25 deg off). The bales give the lane direction directly.
+    rot = math.radians(25)
+    c, s = math.cos(rot), math.sin(rot)
+    tr = lambda p: (c * p[0] - s * p[1], s * p[0] + c * p[1])  # noqa: E731
+    segs = [((0.3, 0.9), (4.0, 0.9)), ((0.3, -0.9), (4.0, -0.9)),
+            ((1.49, 0.30), (1.51, 0.30)), ((1.49, -0.30), (1.51, -0.30))]
+    scan = raycast([(tr(a), tr(b)) for a, b in segs], 0.0, 0.0, 0.0, n=720)
+    cx, cy = tr((1.5, 0.0))
+    ang = scan.flank_axis(cx, cy, rot + math.radians(5))
+    assert ang == pytest.approx(rot, abs=math.radians(4))
+    # Open space on both sides: nothing to measure against.
+    open_scan = raycast(segs[2:], 0.0, 0.0, 0.0, n=720)
+    assert open_scan.flank_axis(1.5, 0.0, 0.0) is None
+
+
 def test_wall_break_found_when_hugging_wall():
     # Traced 0.5 m off the wall: a 36" door 1.5 m ahead, with a bucket 0.8 m inside it
     # (the edge-run method ended on the bucket and read a 3 m opening).

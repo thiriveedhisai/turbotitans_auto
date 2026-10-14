@@ -5,6 +5,8 @@ Publishes:
   /marker/detections  String  JSON list of {id, zone, distance, bearing_deg}
   /perception/bright_exit  Float32  bearing (rad, + left) of a bright lane end (tunnel exit),
                       NaN when nothing stands out
+  /marker/debug       String  JSON {w, h, tags: [... corners, status], rejected: [quads]}, only
+                      while someone subscribes (tt_dash camera view)
 """
 
 import math
@@ -66,6 +68,7 @@ class MarkerDetector(TTNode):
 
         self.pub_zone = self.create_publisher(String, '/zone_event', 10)
         self.pub_det = self.create_publisher(String, '/marker/detections', 10)
+        self.pub_debug = self.create_publisher(String, '/marker/debug', 2)
         self.pub_bright = self.create_publisher(Float32, '/perception/bright_exit', 10)
         self.bright_ratio = float(self.param('bright_exit_ratio', 1.8))
         self.last_bright_log = -1e9
@@ -89,10 +92,11 @@ class MarkerDetector(TTNode):
         if bearing is not None and self.now_s() - self.last_bright_log > 2.0:
             self.last_bright_log = self.now_s()
             self.get_logger().info(f'bright exit at {math.degrees(bearing):+.0f} deg')
-        corners, ids, _ = self.detect(gray)
+        corners, ids, rejected = self.detect(gray)
         if ids is None:
             # Dim tunnel / backlit tag: retry on a locally contrast-equalised image.
-            corners, ids, _ = self.detect(self.clahe.apply(gray))
+            corners, ids, rejected = self.detect(self.clahe.apply(gray))
+        debug = [] if self.pub_debug.get_subscription_count() else None
         seen = set()
         out = []
         if ids is not None:
@@ -100,21 +104,35 @@ class MarkerDetector(TTNode):
                 tag = int(tag)
                 zone = self.zone_of.get(tag)
                 pts = c.reshape(4, 2).astype(np.float32)
-                if zone is None or np.linalg.norm(pts[0] - pts[1]) < self.min_side:
+                side = float(np.linalg.norm(pts[0] - pts[1]))
+                d = None if debug is None else {'id': tag, 'zone': zone, 'side_px': round(side, 1),
+                                                'corners': pts.round(1).tolist(), 'dist': None,
+                                                'bearing': None, 'normal': None}
+                if d is not None:
+                    debug.append(d)
+                if zone is None or side < self.min_side:
+                    if d is not None:
+                        d['status'] = 'unknown id' if zone is None else 'too small'
                     continue
                 ok, rvec, tvec = cv2.solvePnP(self.obj, pts, self.K, self.D,
                                               flags=cv2.SOLVEPNP_IPPE_SQUARE)
                 if not ok:
+                    if d is not None:
+                        d['status'] = 'pose failed'
                     continue
                 t = tvec.flatten()
                 dist = float(np.linalg.norm(t))
-                if dist > self.max_range:
-                    continue
                 # Optical frame: x right, z forward -> bearing positive to the left.
                 bearing = math.degrees(math.atan2(-t[0], t[2]))
                 # Tag face normal in the vehicle frame (tags hang flat on course walls).
                 n = cv2.Rodrigues(rvec)[0][:, 2]
                 normal = math.degrees(math.atan2(-n[0], n[2]))
+                if d is not None:
+                    d.update(dist=round(dist, 2), bearing=round(bearing, 1), normal=round(normal, 1),
+                             status='too far' if dist > self.max_range else
+                             ('TRIGGER' if dist <= self.trigger_range else 'seen'))
+                if dist > self.max_range:
+                    continue
                 out.append({'id': tag, 'zone': zone, 'distance': round(dist, 2),
                             'bearing_deg': round(bearing, 1), 'normal_deg': round(normal, 1)})
                 if dist <= self.trigger_range:
@@ -131,6 +149,11 @@ class MarkerDetector(TTNode):
                 self.get_logger().info(f'marker -> zone {zone}')
         if out:
             self.pub_det.publish(String(data=dumps(out)))
+        if debug is not None:
+            self.pub_debug.publish(String(data=dumps({
+                'stamp': msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9,
+                'w': gray.shape[1], 'h': gray.shape[0], 'tags': debug,
+                'rejected': [r.reshape(4, 2).round(0).tolist() for r in (rejected or [])[:20]]})))
 
 
 def main(args=None):

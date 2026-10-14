@@ -15,6 +15,7 @@ import sys
 import yaml
 
 from tt_course_sim.course import FALL_DROP, Course
+from tt_obstacle_course.bank_layout import bank_layout
 from tt_obstacle_course.behaviors import RUNNING, Config, Context, StuckMonitor, make_behavior
 from tt_obstacle_course.geometry import OdomTracker, SteeringModel, wrap_angle
 from tt_obstacle_course.scan_utils import ScanView
@@ -179,41 +180,76 @@ SCENARIOS = {
 }
 
 
-def bank_chain(course, radius):
-    """mission.yaml bank_approach + bank_uturn: walls_end trigger, fence the plane from its
-    known size (as MissionManager.set_bank_frame), then plan_drive into the return lane."""
+def bank_chain(course, radius, yaw_off_deg=0.0, odom_bias_deg=0.0, mode='plan', speed=0.45):
+    """mission.yaml bank_approach + bank_uturn: walls_end trigger, lay the plane out from
+    the lane the lidar sees (bank_layout, as MissionManager.set_bank_frame), then
+    plan_drive into the return lane (mode 'kturn': fenced 3-point turn first).
+    yaw_off_deg: approach that far off the lane; odom_bias_deg: odometry heading error
+    (the plane layout should not depend on it)."""
     with open('src/tt_obstacle_course/config/mission.yaml', encoding='utf-8') as f:
         b = yaml.safe_load(f).get('bank_entry', {})
     r = radius or load_tuning()[0]['vehicle']['planning_min_turn_radius']
-    seen = []
+    seen, scans = [], []
 
     def walls_end(t, s, ok):
         e = s.walls_end() if ok and t.odom.distance >= 0.8 else None
         if e is not None and e <= b['trigger']:
             seen.append(e)
+            scans.append(s)
             return True
         return False
-    status, truck = run(course, course.waypoint('bank_approach'), 'wall_center', {'speed': 0.6},
-                        radius=r, stop=walls_end)
+    x0, y0, yaw0 = course.waypoint('bank_approach')[:3]
+    if yaw_off_deg:
+        status, truck = run(course, (x0, y0, yaw0 + math.radians(yaw_off_deg)), 'heading_hold',
+                            {'speed': 0.6, 'heading_offset_deg': 0.0}, radius=r, stop=walls_end)
+    else:
+        status, truck = run(course, (x0, y0, yaw0), 'wall_center', {'speed': 0.6},
+                            radius=r, stop=walls_end)
     if status != 'stopped':
         return 'no_trigger', truck
     o = truck.odom
-    c, s = math.cos(o.yaw), math.sin(o.yaw)
-    w = lambda u, v: [o.x + c * u - s * v, o.y + s * u + c * v]  # noqa: E731
-    near = seen[0] - b['lidar_behind_camera']
-    far = near + b['plane_depth'] - b['margin']
-    fence = [w(far, b['north']) + w(far, b['south']), w(near, b['north']) + w(far, b['north']),
-             w(near, b['south']) + w(far, b['south'])]
-    goal = w(near - 0.6, b['return_offset']) + [o.yaw + math.pi]
-    xs = []
-    status, truck = run(course, None, 'plan_drive',
-                        {'goal': goal, 'fence': fence, 'speed': 0.45, 'reverse_speed': 0.3,
-                         'goal_tol': 0.35, 'yaw_tol': 0.6, 'margin': 1.2},
-                        radius=r, truck=truck, max_s=60.0,
-                        stop=lambda t, s, ok: xs.append(t.x) and False)
-    bx, _, _, hl, _ = course.bank_box
-    if max(xs) + 0.05 > bx + hl:
-        return 'off_plane', truck
+    # Odometry heading bias: rotate the odometry frame about the truck (offline odom = truth).
+    bias = math.radians(odom_bias_deg)
+    lay = bank_layout(scans[0], (o.x, o.y, o.yaw + bias), seen[0], b)
+    cb, sb = math.cos(-bias), math.sin(-bias)
+
+    def unbias(px, py):
+        return [o.x + cb * (px - o.x) - sb * (py - o.y), o.y + sb * (px - o.x) + cb * (py - o.y)]
+    fence = [unbias(*s[:2]) + unbias(*s[2:]) for s in lay['fence']]
+    rear = [unbias(*s[:2]) + unbias(*s[2:]) for s in lay['rear_fence']]
+    enter = unbias(*lay['enter_line'][:2]) + unbias(*lay['enter_line'][2:])
+    goal = unbias(*lay['goal'][:2]) + [lay['goal'][2] - bias]
+    pts = []
+    track = lambda t, s, ok: pts.append((t.x, t.y, t.yaw)) and False  # noqa: E731
+    if mode == 'plan':
+        status, truck = run(course, None, 'plan_drive',
+                            {'goal': goal, 'fence': fence, 'speed': speed, 'reverse_speed': speed * 0.8,
+                             'goal_tol': 0.35, 'yaw_tol': 0.6, 'margin': 1.2},
+                            radius=r, truck=truck, max_s=60.0, stop=track)
+    else:
+        status, truck = run(course, None, 'fenced_kturn',
+                        {'fence': fence, 'rear_fence': rear, 'heading_abs': lay['return_yaw'] - bias,
+                         'aim_point': goal[:2],
+                         'direction': 'right', 'enter_line': enter,
+                         'enter_axis': lay['axis'] - bias, 'enter_past': 0.05, 'speed': 0.35,
+                         'reverse_speed': 0.3, 'margin': 0.1, 'heading_tol_deg': 25},
+                        radius=r, truck=truck, max_s=40.0, stop=track)
+    if status == 'done':
+        status, truck = run(course, None, 'plan_drive',
+                            {'goal': goal, 'fence': fence, 'speed': 0.4, 'reverse_speed': 0.3,
+                             'goal_tol': 0.35, 'yaw_tol': 0.6, 'margin': 1.2},
+                            radius=r, truck=truck, max_s=40.0, stop=track)
+    bx, by, byaw, hl, hw = course.bank_box
+    # Every bumper corner must stay on the plane once past its near edge.
+    for x, y, yw in pts:
+        for u0 in (0.152 - 0.15, -(0.28 + 0.15)):
+            for side in (1, -1):
+                px = x + u0 * math.cos(yw) - side * 0.1015 * math.sin(yw)
+                py = y + u0 * math.sin(yw) + side * 0.1015 * math.cos(yw)
+                u = math.cos(byaw) * (px - bx) + math.sin(byaw) * (py - by)
+                v = -math.sin(byaw) * (px - bx) + math.cos(byaw) * (py - by)
+                if u > hl or (u > -hl and abs(v) > hw):
+                    return 'off_plane', truck
     return status, truck
 
 

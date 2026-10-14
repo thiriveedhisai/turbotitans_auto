@@ -251,6 +251,41 @@ class ScanView:
         s, c = np.polyfit(px[best_in], py[best_in], 1)
         return float(c), float(s), int(best_in.sum())
 
+    def flank_axis(self, cx, cy, cross, inner=0.4, outer=1.4, depth=1.0, min_pts=6,
+                   min_elong=4.0):
+        """Direction (rad, robot frame) of the bales flanking a hoop whose leg-pair centre
+        is (cx, cy) and whose crossing direction is about `cross`: returns beyond each leg,
+        along the leg line, fitted by PCA. The bales run along the lane, so a real hoop's
+        crossing is parallel to them, whatever odometry heading says. None if neither side
+        shows an elongated run of returns."""
+        xs, ys = self.points()
+        ux, uy = -math.sin(cross), math.cos(cross)     # along the leg line
+        wx, wy = math.cos(cross), math.sin(cross)      # through the hoop
+        dx, dy = xs - cx, ys - cy
+        a = dx * ux + dy * uy
+        b = dx * wx + dy * wy
+        angles, weights = [], []
+        for side in (1, -1):
+            m = (side * a > inner) & (side * a < outer) & (np.abs(b) < depth)
+            if m.sum() < min_pts:
+                continue
+            pts = np.stack([xs[m], ys[m]], axis=1)
+            evals, evecs = np.linalg.eigh(np.cov(pts.T))
+            if evals[1] < min_elong * max(evals[0], 1e-6):
+                continue
+            v = evecs[:, 1]
+            angles.append(math.atan2(v[1], v[0]))
+            weights.append(float(m.sum()))
+        if not angles:
+            return None
+        # Average undirected angles (mod pi), then pick the sense nearest `cross`.
+        s = sum(w * math.sin(2 * t) for t, w in zip(angles, weights))
+        c = sum(w * math.cos(2 * t) for t, w in zip(angles, weights))
+        ang = 0.5 * math.atan2(s, c)
+        if abs(_wrap(ang - cross)) > math.pi / 2:
+            ang = _wrap(ang + math.pi)
+        return ang
+
     def find_wall_breaks(self, side, min_width, depth_beyond, max_wall=3.0, u_max=4.0,
                          on_wall=0.12, min_beams=2, max_width=1.4, support=0.5):
         """Openings in the wall on ``side`` measured along that wall: fit the wall line

@@ -27,7 +27,16 @@ setup(
             f'{name} = {package_name}.{name}:main' for name in (
                 'terrain_monitor', 'start_detector', 'marker_detector', 'course_perception',
                 'behavior_executor', 'speed_governor', 'twist_to_ackermann', 'mission_manager',
-                'odom_guard')
+                'odom_guard', 'estop_bridge')
+        ] + [
+            f'tt_dash = {package_name}.debug_dash:main',
+            f'tt_cam = {package_name}.debug_dash:main_cam',
+            f'tt_lidar = {package_name}.debug_dash:main_lidar',
+            f'tt_log = {package_name}.log_story:main',
+            f'tt_record = {package_name}.record:main',
+            f'tt_mission = {package_name}.mission_cut:main',
+            f'tt_map = {package_name}.map_tools:main',
+            f'map_localizer = {package_name}.map_tools:main_localizer',
         ],
     },
 )

@@ -7,7 +7,8 @@
   ros__parameters:
     odom_topic: "/odom/fused"          # odom_guard output (ZED odometry + dropout handling)
     scan_topic: "/scan"
-    scan_yaw_offset: 0.0               # rad; rotate scan so 0 = vehicle forward
+    scan_yaw_offset: 3.14159           # rad; rotate scan so 0 = vehicle forward. The A1 is mounted
+                                       # with its 0 deg facing backwards (keep launch laser_yaw equal)
     scan_flip: false                   # true if the lidar is mounted upside down
     # Own-truck returns to drop: flat list of [bearing_deg, half_width_deg, max_range]
     # triples (vehicle frame, lidar centre origin, 0 = forward, + = left). Only returns in

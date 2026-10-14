@@ -226,7 +226,8 @@ def truck_sdf(pose, radius):
         # Flag pole 4" from the rear at the right edge (the lidar sees it; scan_self_mask).
         '<visual name="flag"><pose>-0.328 -0.095 0.17 0 0 0</pose><geometry><cylinder><radius>0.006</radius>'
         '<length>0.40</length></cylinder></geometry><material><diffuse>0.9 0.9 0.1 1</diffuse></material></visual>'
-        '<sensor name="lidar" type="gpu_lidar"><pose>-0.15 0 0.05 0 0 0</pose><topic>/gz/scan</topic>'
+        # Mounted backwards like the real A1 (tuning scan_yaw_offset = pi).
+        '<sensor name="lidar" type="gpu_lidar"><pose>-0.15 0 0.05 0 0 3.14159</pose><topic>/gz/scan</topic>'
         '<gz_frame_id>laser</gz_frame_id><update_rate>10</update_rate><always_on>1</always_on>'
         '<lidar><scan><horizontal><samples>360</samples><resolution>1</resolution>'
         '<min_angle>-3.14159</min_angle><max_angle>3.12414</max_angle></horizontal></scan>'

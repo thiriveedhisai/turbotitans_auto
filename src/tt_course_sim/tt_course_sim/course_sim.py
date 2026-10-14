@@ -266,7 +266,8 @@ class CourseSim(Node):
         m = LaserScan()
         m.header.stamp = self.stamp()
         m.header.frame_id = 'laser'
-        m.angle_min = -math.pi
+        # Ranges start at vehicle-backward; the lidar is mounted backwards like the real A1.
+        m.angle_min = 0.0
         m.angle_increment = 2 * math.pi / ranges.size
         m.angle_max = m.angle_min + m.angle_increment * (ranges.size - 1)
         m.range_min, m.range_max = 0.15, 8.0

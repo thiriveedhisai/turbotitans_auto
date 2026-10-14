@@ -61,7 +61,7 @@ def generate_launch_description():
         DeclareLaunchArgument('laser_x', default_value='-0.15'),
         DeclareLaunchArgument('laser_y', default_value='0.0'),
         DeclareLaunchArgument('laser_z', default_value='0.05'),
-        DeclareLaunchArgument('laser_yaw', default_value='0.0'),
+        DeclareLaunchArgument('laser_yaw', default_value='3.14159'),
     ]
 
     drivers = GroupAction(condition=IfCondition(sensors), actions=[

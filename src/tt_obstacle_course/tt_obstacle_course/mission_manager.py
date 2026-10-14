@@ -310,7 +310,32 @@ class MissionManager(TTNode):
         # connector beyond, but the field depth is fixed; only the lateral position moves.
         c, s = math.cos(gyaw), math.sin(gyaw)
         lat = -s * (ex - gx) + c * (ey - gy)
-        return gx + c * hint - s * lat, gy + s * hint + c * lat, gyaw
+        px, py = gx + c * hint - s * lat, gy + s * hint + c * lat
+        if not self.sees_through(px, py):
+            return None
+        return px, py, gyaw
+
+    def sees_through(self, x, y, margin=0.4):
+        """Lidar reaches past (x, y): an opening, not the wall or a corner at it (seed 4
+        took the field's NE corner for the exit and rammed it until the zone timed out).
+        Unknown (no scan, behind us) counts as open."""
+        if self.scan is None or not self.lidar_ok:
+            return True
+        fx, fy = self.odom.to_robot(x, y)
+        lx = fx - float(self.param('laser_offset_x', -0.15))
+        ly = fy - float(self.param('laser_offset_y', 0.0))
+        if lx < 0.3:
+            return True
+        d = math.hypot(lx, ly)
+        r = self.scan.range_at(math.atan2(ly, lx), math.radians(2.0))
+        if r >= d + margin:
+            return True
+        now = self.now_s()
+        if now - getattr(self, 'last_exit_reject_log', -1e9) > 2.0:
+            self.last_exit_reject_log = now
+            self.get_logger().info(f'exit rejected at ({x:.2f}, {y:.2f}): lidar hits {r:.2f} m, '
+                                   f'opening is {d:.2f} m away')
+        return False
 
     def track_exit(self):
         """In the bucket field: keep the exit estimate on the latest validated detection,
@@ -328,6 +353,11 @@ class MissionManager(TTNode):
         spec = self.run.spec if self.run else {}
         if spec.get('params', {}).get('goal') == '$exit_goal':
             self.send_behavior(spec['behavior'], spec['params'])
+        elif str(spec.get('gate', {}).get('target', '')).startswith('$exit') \
+                and self.run.phase == 'approach' and old is not None:
+            # Re-line-up on the new exit (the gate set off for the old one).
+            self.run.phase = None
+            self.run.queue = []
 
     def set_exit(self, gap, lead):
         """Waypoints through a detected exit: `lead` m before it on its axis, then past it."""

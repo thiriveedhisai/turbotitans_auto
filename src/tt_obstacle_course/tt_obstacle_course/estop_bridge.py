@@ -3,7 +3,6 @@
 The ESP publishes {"heartbeat": int, "pin_state": int} on esp/trigger to the local
 mosquitto broker. Stop when pin_state == stop_pin_state, heartbeat == 0, or nothing
 arrived for heartbeat_timeout s (radio lost = stop). speed_governor latches it.
-Also republishes the old /estop_trigger JSON (with start_state from /race_start).
 """
 
 import json
@@ -12,7 +11,7 @@ import time
 
 from std_msgs.msg import Bool, String
 
-from tt_obstacle_course.ros_common import RELIABLE_SUB, TTNode, run
+from tt_obstacle_course.ros_common import TTNode, run
 
 
 class EstopBridge(TTNode):
@@ -30,15 +29,13 @@ class EstopBridge(TTNode):
         self.pin_state = self.stop_pin
         self.last_rx = 0.0
         self.connected = False
-        self.started = False
         self.stop = None
 
         self.pub = self.create_publisher(Bool, '/estop/hw', 10)
         self.status_pub = self.create_publisher(String, '/estop/hw_status', 10)
-        self.legacy_pub = self.create_publisher(String, '/estop_trigger', 10)
-        self.create_subscription(Bool, '/race_start', self.on_start, RELIABLE_SUB)
         self.client = self.connect()
-        self.create_timer(0.2, self.tick)
+        # 20 Hz: a button press reaches the governor (also 20 Hz) within ~0.1 s.
+        self.create_timer(0.05, self.tick)
 
     def connect(self):
         try:
@@ -77,9 +74,6 @@ class EstopBridge(TTNode):
         with self.lock:
             self.heartbeat, self.pin_state, self.last_rx = hb, pin, time.monotonic()
 
-    def on_start(self, msg):
-        self.started = self.started or msg.data
-
     def tick(self):
         with self.lock:
             age = time.monotonic() - self.last_rx
@@ -100,8 +94,6 @@ class EstopBridge(TTNode):
         self.status_pub.publish(String(data=json.dumps(
             {'stop': stop, 'reason': reason, 'heartbeat': hb, 'pin_state': pin,
              'age': round(min(age, 99.0), 1)})))
-        self.legacy_pub.publish(String(data=json.dumps(
-            {'heartbeat': hb, 'pin_state': pin, 'start_state': int(self.started)})))
 
     def destroy_node(self):
         if self.client is not None:

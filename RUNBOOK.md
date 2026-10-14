@@ -228,7 +228,6 @@ sim, updating from a run with moved buckets/hoops cut the hoop-zone error from 0
   to RUN, then press **Release** on the dashboard (or `/estop` false above).
 - The STOP it shows at boot (before the ESP is heard) is not latched.
 - It stops teleop too. Bench work without the ESP: `hw_estop:=false`.
-- Old consumers of `/estop_trigger` still get the same JSON (`start_state` = race started).
 - `Ctrl-C` makes `rc_car_controller` set the servo and ESC to neutral and switch the PWM outputs off.
 - If the launch dies or stops publishing, the controller goes to neutral on its own after 0.5 s without commands.
 - Keep the RC transmitter or the physical kill switch within reach anyway.

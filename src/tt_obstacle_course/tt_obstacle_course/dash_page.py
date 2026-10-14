@@ -259,6 +259,9 @@ function drawLidar(s){
     g.fillText(p.name+' '+p.age.toFixed(1)+'s',a+8*d,b);g.globalAlpha=1;});
   if(st.lidar_ok===false){g.fillStyle='#f55';g.font='bold '+(14*d)+'px sans-serif';g.fillText('LIDAR GATED (tilted): behaviors ignore it',10*d,20*d);}
   if(!sc){g.fillStyle='#888';g.font=(14*d)+'px sans-serif';g.fillText('no /scan yet',10*d,20*d);}
+  const sa=s&&s.topics&&s.topics.scan;
+  if(sc&&sa&&sa.age>1){g.fillStyle='#fa0';g.font='bold '+(14*d)+'px sans-serif';
+    g.fillText('STALE: last /scan '+sa.age.toFixed(0)+' s ago (lidar driver stopped?)',10*d,40*d);}
 }
 
 // ---- map view

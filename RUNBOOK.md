@@ -48,7 +48,11 @@ Before every session:
 - [ ] The ZED is on a USB3 port.
 - [ ] Battery is charged, and the wheels are off the ground for the first test.
 - [ ] Mosquitto runs (`systemctl is-active mosquitto`), the ESP8266 e-stop is powered, and
-      `mosquitto_sub -t esp/trigger -C 3` prints its `{"heartbeat": .., "pin_state": ..}` messages.
+      `mosquitto_sub -v -t '#' -C 3 -W 10` prints its `esp/trigger {"heartbeat": .., "pin_state": ..}`
+      messages. Nothing within 10 s: the ESP isn't reaching the broker. Mosquitto 2.x listens on
+      localhost only by default; the ESP connects over Wi-Fi, so open it to the network once:
+      `printf 'listener 1883 0.0.0.0\nallow_anonymous true\n' | sudo tee /etc/mosquitto/conf.d/esp.conf && sudo systemctl restart mosquitto`
+      (team network only: anyone on it can publish).
 - [ ] `python3 -c "import paho.mqtt"` works (else `sudo apt install python3-paho-mqtt`).
 
 ## 2. Run the whole course

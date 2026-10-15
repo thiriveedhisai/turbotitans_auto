@@ -16,6 +16,8 @@ Manual driving only (dashboard arrows, or `ros2 run tt_obstacle_course tt_teleop
   ... teleop:=true
 Left-wall tracing only, whole course:
   ... wall_trace:=true
+Map from launch until Ctrl-C (no dashboard needed), e.g. while driving by hand:
+  ... teleop:=true mapping:=true
 """
 
 from launch import LaunchDescription
@@ -68,6 +70,9 @@ def generate_launch_description():
                                           'collision stops; arrows on the dashboard or tt_teleop'),
         DeclareLaunchArgument('wall_trace', default_value='false',
                               description='true = only trace the left wall round the whole course'),
+        DeclareLaunchArgument('mapping', default_value='false',
+                              description='true = record a lidar map + bag from launch until Ctrl-C '
+                                          '(saved to maps_dir, like the dashboard Map button)'),
         DeclareLaunchArgument('sensors', default_value='true', description='Start ZED and lidar drivers'),
         DeclareLaunchArgument('camera_nodes', default_value='true',
                               description='Start start_detector and marker_detector'),
@@ -174,8 +179,15 @@ def _stack_and_nav2(context):
              parameters=[nav2_params, *sim_time]),
     ])
     dash = []
+    maps_dir = LaunchConfiguration('maps_dir').perform(context).strip()
+    if LaunchConfiguration('mapping').perform(context) == 'true':
+        # Ctrl-C: saving the map and closing the bag takes a few s; don't let launch kill it.
+        dash.append(Node(package='tt_obstacle_course', executable='tt_map', name='tt_map',
+                         output='screen', parameters=sim_time, sigterm_timeout='20',
+                         arguments=['live', '--record', '--no-auto-stop',
+                                    '--tuning', LaunchConfiguration('tuning').perform(context)]
+                         + (['--dir', maps_dir] if maps_dir else [])))
     if teleop or LaunchConfiguration('dash').perform(context) == 'true':
-        maps_dir = LaunchConfiguration('maps_dir').perform(context).strip()
         dash.append(Node(package='tt_obstacle_course', executable='tt_dash', name='tt_dash',
                          output='screen', parameters=sim_time,
                          arguments=['--control'] + (['--maps-dir', maps_dir] if maps_dir else [])))

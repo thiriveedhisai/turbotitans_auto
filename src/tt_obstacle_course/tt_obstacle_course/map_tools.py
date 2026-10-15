@@ -969,18 +969,48 @@ def pose_msg(pose, stamp, frame='map'):
     return m
 
 
+def start_bag(out):
+    """Record the same topics as tt_record into <out>/bag (for rebuilding the map later)."""
+    import shutil
+    import subprocess
+    from tt_obstacle_course.record import TOPICS
+    if shutil.which('ros2') is None:
+        return None
+    log = open(os.path.join(out, 'bag.log'), 'w')
+    return subprocess.Popen(['ros2', 'bag', 'record', '-o', os.path.join(out, 'bag')] + TOPICS,
+                            stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+
+
+def stop_bag(rec, wait=8.0):
+    import signal
+    import subprocess
+    if rec is None or rec.poll() is not None:
+        return
+    os.killpg(rec.pid, signal.SIGINT)
+    try:
+        rec.wait(wait)
+    except subprocess.TimeoutExpired:
+        os.killpg(rec.pid, signal.SIGKILL)
+
+
 def live(args, cfg):
-    """Map while driving; /map republished every 2 s; stops itself back at the start line."""
+    """Map while driving; /map republished every 2 s; stops itself back at the start line
+    (unless --no-auto-stop). Ctrl-C (or the launch shutting down) saves the map."""
     rclpy, latched = ros_common()
     from geometry_msgs.msg import PoseStamped
     from nav_msgs.msg import OccupancyGrid, Odometry
+    from rclpy.executors import ExternalShutdownException
     from rclpy.qos import qos_profile_sensor_data
     from sensor_msgs.msg import Imu, LaserScan
     from std_msgs.msg import Bool, String
-    rclpy.init()
+    from tt_obstacle_course.debug_dash import workspace_maps_dir
+    rclpy.init(args=['tt_map'] + getattr(args, 'ros_args', []))
     node = rclpy.create_node('tt_map')
-    out = os.path.expanduser(os.path.join(args.dir, args.out))
-    ses = MapSession(cfg, out, log=lambda s: node.get_logger().info(s))
+    out = os.path.join(os.path.expanduser(args.dir) if args.dir else workspace_maps_dir(), args.out)
+    os.makedirs(out, exist_ok=True)
+    ses = MapSession(cfg, out, auto_stop=not args.no_auto_stop,
+                     log=lambda s: node.get_logger().info(s))
+    rec = start_bag(out) if args.record else None
     pub_map = node.create_publisher(OccupancyGrid, '/map', latched)
     pub_pose = node.create_publisher(PoseStamped, '/localization/pose', 10)
 
@@ -1003,14 +1033,19 @@ def live(args, cfg):
     node.create_subscription(String, '/mission/state', lambda m: ses.lab.feed('/mission/state', m), 10)
     node.create_subscription(String, '/zone_event', lambda m: ses.lab.feed('/zone_event', m), 10)
     node.create_timer(2.0, publish)
-    node.get_logger().info(f'mapping; drive the course slowly. Stops back at the start, or Ctrl-C. -> {out}')
+    node.get_logger().info(f'mapping; drive the course slowly. '
+                           f'{"Ctrl-C saves" if args.no_auto_stop else "Stops back at the start, or Ctrl-C"}'
+                           f'{" (recording bag)" if rec else ""}. -> {out}')
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         path = ses.stop()
-        node.get_logger().info(f'map saved: {path} ({ses.mapper.added} scans)')
+        print(f'[tt_map] map saved: {path} ({ses.mapper.added} scans)', flush=True)
+        stop_bag(rec)
+        if rec is not None:
+            print(f'[tt_map] bag saved: {out}/bag', flush=True)
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
@@ -1092,6 +1127,11 @@ def main_localizer(args=None):
 
 
 def main(argv=None):
+    raw = sys.argv[1:] if argv is None else list(argv)
+    ros_args = []
+    if '--ros-args' in raw:
+        i = raw.index('--ros-args')
+        raw, ros_args = raw[:i], raw[i:]
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter,
                                  epilog=__doc__.split('\n', 1)[1])
@@ -1103,8 +1143,13 @@ def main(argv=None):
         p.add_argument('--odom', default='/odom/local',
                        help='odometry without map correction (falls back to /odom/fused in bags without it)')
         if name in ('build', 'live', 'update'):
-            p.add_argument('-o', '--out', default=time.strftime('map_%m%d_%H%M'))
-            p.add_argument('--dir', default='~/maps')
+            p.add_argument('-o', '--out', default=time.strftime('map_%m%d_%H%M%S'))
+            p.add_argument('--dir', default=None if name == 'live' else '~/maps',
+                           help='(live: default <workspace>/maps, same as the dashboard)')
+        if name == 'live':
+            p.add_argument('--record', action='store_true', help='also record a bag into <map>/bag')
+            p.add_argument('--no-auto-stop', action='store_true',
+                           help='keep mapping past the start line (several laps); Ctrl-C saves')
         if name == 'build':
             p.add_argument('bag')
             p.add_argument('--trust-odom', action='store_true',
@@ -1118,7 +1163,8 @@ def main(argv=None):
             p.add_argument('bag')
             p.add_argument('--zones', nargs='+', required=True,
                            help="zones to re-map from this run (names from the map), or 'all'")
-    a = ap.parse_args(argv)
+    a = ap.parse_args(raw)
+    a.ros_args = ros_args
     from tt_obstacle_course.debug_dash import load_tuning
     cfg = load_tuning(a.tuning)
     if a.cmd in ('build', 'eval', 'update'):

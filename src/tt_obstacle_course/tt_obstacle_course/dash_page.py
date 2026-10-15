@@ -78,6 +78,7 @@ select{background:#000;color:var(--fg);border:1px solid var(--line)}
     <b>Map</b>
     <button id="mapstart" style="font-size:14px;padding:5px 12px">Start map</button>
     <button id="mapstop" style="font-size:14px;padding:5px 12px">Stop &amp; save map</button>
+    <label title="Untick to drive several laps: then only Stop &amp; save ends it"><input type="checkbox" id="mapauto" checked> stop by itself after 1 lap</label>
     <span id="mapstat" style="font-family:ui-monospace,monospace">not mapping</span>
    </div>
    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;border-top:1px solid var(--line);padding-top:6px">
@@ -327,7 +328,7 @@ function initDrive(){
   $('dspeed').oninput=()=>{$('dspeedv').textContent=parseFloat($('dspeed').value).toFixed(2);};
   $('estopbtn').onclick=()=>{setDrive(false);post('/estop',{on:true});};
   $('releasebtn').onclick=()=>post('/estop',{on:false});
-  $('mapstart').onclick=()=>post('/map/start',{});
+  $('mapstart').onclick=()=>post('/map/start',{auto_stop:$('mapauto').checked});
   $('mapstop').onclick=()=>post('/map/stop',{});
   $('ocstart').onclick=()=>post('/odocheck',{action:'start',leg1_m:parseFloat($('oc1').value),
     leg2_m:parseFloat($('oc2').value),turn_deg:parseFloat($('octurn').value)});

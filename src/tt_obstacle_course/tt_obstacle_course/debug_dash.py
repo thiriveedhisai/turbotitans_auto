@@ -521,17 +521,18 @@ class MapControl:
         self.rec = None
         self.lock = threading.Lock()
 
-    def start(self):
+    def start(self, auto_stop=True):
         from tt_obstacle_course.map_tools import MapSession
         with self.lock:
             if self.session is not None and not self.session.done:
                 return self.session.out
             out = os.path.join(self.maps_dir, time.strftime('map_%m%d_%H%M%S'))
             os.makedirs(out, exist_ok=True)
-            self.session = MapSession(self.cfg, out, log=lambda s: self.hub.note(s))
+            self.session = MapSession(self.cfg, out, auto_stop=auto_stop, log=lambda s: self.hub.note(s))
         self.start_bag(out)
-        self.hub.note(f'map: started, saving to {out}. Drive the course slowly; it stops by itself '
-                      'back at the start line (or press Stop & save).')
+        self.hub.note(f'map: started, saving to {out}. Drive the course slowly; '
+                      + ('it stops by itself back at the start line (or press Stop & save).'
+                         if auto_stop else 'no auto-stop: press Stop & save when done.'))
         return out
 
     def start_bag(self, out):
@@ -742,7 +743,8 @@ def make_handler(hub, cfg, view, offline, token=None):
             if path == '/estop':
                 hub.estop_pub.publish(Bool(data=bool(d.get('on', True))))
             elif path == '/map/start':
-                return self.send(200, 'text/plain', hub.mapping.start().encode())
+                return self.send(200, 'text/plain',
+                                 hub.mapping.start(bool(d.get('auto_stop', True))).encode())
             elif path == '/map/stop':
                 return self.send(200, 'text/plain', (hub.mapping.stop() or '').encode())
             elif path == '/odocheck':

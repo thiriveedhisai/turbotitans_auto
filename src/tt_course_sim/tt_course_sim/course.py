@@ -196,13 +196,16 @@ class Course:
                 for s in np.arange(0, length + 1e-6, 0.05):
                     (px, py), hx = centre(s)
                     pt = (px - math.sin(hx) * side * width / 2, py + math.cos(hx) * side * width / 2)
+                    # Walls stand on the (sloped) lane surface, e.g. the helix.
+                    zb = max(0.0, z0 + slope * s - 0.03)
                     if prev:
-                        self.lines.append(prev + pt + ('bale',))
-                        self.segs3d.append((*prev, 0.0, BALE_H, *pt, 0.0, BALE_H, 'bale'))
+                        self.lines.append(prev[:2] + pt + ('bale',))
+                        self.segs3d.append((*prev[:2], prev[2], prev[2] + BALE_H,
+                                            *pt, zb, zb + BALE_H, 'bale'))
                         for t in np.linspace(0, 1, 4):
                             self.obst.append((prev[0] + t * (pt[0] - prev[0]),
-                                              prev[1] + t * (pt[1] - prev[1]), 0.0, BALE_H))
-                    prev = pt
+                                              prev[1] + t * (pt[1] - prev[1]), zb, zb + BALE_H))
+                    prev = (*pt, zb)
         if self.rails and (z0 > 0.05 or z1 > 0.05):
             self.rail_edges(centre, length, width, lambda s: z0 + slope * s)
         (self.x, self.y), self.yaw = centre(length)
@@ -234,7 +237,7 @@ class Course:
                       marker=False)
         self.straight(0.79, 1.054, 'bridge', walls=(False, False), z0=0.635, bot='slab',
                       marker=False)
-        self.arc(1.22, 270, +1, 1.054, 'helix', walls=(False, False), z0=0.635, z1=0.0,
+        self.arc(1.22, 270, +1, 1.054, 'helix', z0=0.635, z1=0.0,
                  bot='slab', marker=False)
         # Helix exit -> 32" funnel -> 5 ft tunnel under the bridge -> 10 ft straight.
         self.funnel(0.81, 1.054, 0.813, 'tunnel')

@@ -216,3 +216,5 @@ mission_manager:
     use_nav2: true
     nav2_action: "navigate_to_pose"
     odom_frame: "odom"
+    # Wall measurements (corridor width, field side wall) ignore buckets/posts here.
+    object_filter_zones: [wide, buckets]

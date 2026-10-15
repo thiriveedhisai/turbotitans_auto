@@ -163,6 +163,8 @@ class MissionManager(TTNode):
         self.terrain = 'flat'
         self.lidar_ok = True
         self.scan = None
+        self.wall_scan = None
+        self.object_zones = set(self.param('object_filter_zones', ['wide', 'buckets']))
         self.markers = {}
         self.gaps = {}
         self.gate = None
@@ -244,6 +246,10 @@ class MissionManager(TTNode):
 
     def on_scan(self, msg):
         self.scan = self.scan_view(msg)
+        # Buckets beside the truck read as connector walls (NT4) and as the field side
+        # wall (NT9): wall measurements leave out small free-standing objects there.
+        in_objects = self.zone_idx >= 0 and self.zone['name'] in self.object_zones
+        self.wall_scan = self.scan.without_objects() if in_objects else self.scan
 
     @staticmethod
     def pose_of(msg):
@@ -440,7 +446,7 @@ class MissionManager(TTNode):
         lateral = 0.0
         wall = None
         if self.scan is not None and self.lidar_ok:
-            wall = self.scan.far_side_wall(side)
+            wall = self.wall_scan.far_side_wall(side)
         if wall is not None:
             rx, ry = self.odom.x - gx, self.odom.y - gy
             robot_lat = -s * rx + c * ry
@@ -586,11 +592,11 @@ class MissionManager(TTNode):
             # That side's wall has ended (lane opens into an area): lidar, not odometry.
             if not self.lidar_ok or self.scan is None:
                 return False
-            return self.scan.side_distance(+1 if kind == 'open_left' else -1) >= float(val)
+            return self.wall_scan.side_distance(+1 if kind == 'open_left' else -1) >= float(val)
         if kind == 'walls_lost':
             if not self.lidar_ok or self.scan is None:
                 return False
-            return min(self.scan.side_distance(+1), self.scan.side_distance(-1)) >= float(val)
+            return min(self.wall_scan.side_distance(+1), self.wall_scan.side_distance(-1)) >= float(val)
         if kind == 'opening_ahead':
             # Both walls end just ahead: the +/-60 deg beams stop hitting them.
             if not self.lidar_ok or self.scan is None:
@@ -621,7 +627,7 @@ class MissionManager(TTNode):
             # Walls on both sides closer together than val (e.g. an exit lane).
             if not self.lidar_ok or self.scan is None:
                 return False
-            return self.scan.side_distance(+1) + self.scan.side_distance(-1) <= float(val)
+            return self.wall_scan.side_distance(+1) + self.wall_scan.side_distance(-1) <= float(val)
         raise ValueError(f'unknown trigger {trigger!r}')
 
     def step_finished(self, now):

@@ -113,6 +113,42 @@ class ScanView:
         m = np.isfinite(r)
         return r[m] * np.cos(a[m]), r[m] * np.sin(a[m])
 
+    def object_mask(self, max_size=0.45, min_jump=0.25, link=0.08):
+        """Returns that belong to small free-standing objects (buckets, posts): a run of
+        neighbouring returns at most max_size across with the background at least
+        min_jump farther (or nothing) on both sides. Walls are long or end on one side only."""
+        r, a = self.ranges, self.angles
+        fin = np.isfinite(r)
+        x = np.where(fin, r * np.cos(a), np.nan)
+        y = np.where(fin, r * np.sin(a), np.nan)
+        mask = np.zeros(r.size, dtype=bool)
+        step = float(np.median(np.diff(a))) if a.size > 1 else DEG
+        i, n = 0, r.size
+        while i < n:
+            if not fin[i]:
+                i += 1
+                continue
+            j = i
+            while j + 1 < n and fin[j + 1] and math.hypot(x[j + 1] - x[j], y[j + 1] - y[j]) \
+                    <= max(link, 2.5 * r[j] * step):
+                j += 1
+            near = float(r[i:j + 1].min())
+            before = r[i - 1] if i > 0 else math.inf
+            after = r[j + 1] if j + 1 < n else math.inf
+            if (math.hypot(x[j] - x[i], y[j] - y[i]) <= max_size
+                    and before >= near + min_jump and after >= near + min_jump):
+                mask[i:j + 1] = True
+            i = j + 1
+        return mask
+
+    def without_objects(self, **kw):
+        """Copy with buckets/posts removed, for wall measurements only (the planner
+        must still see them)."""
+        out = object.__new__(ScanView)
+        out.angles = self.angles
+        out.ranges = np.where(self.object_mask(**kw), np.inf, self.ranges)
+        return out
+
     # ----------------------------------------------------------------- walls
     def side_distance(self, side, half_window=20 * DEG):
         """Perpendicular distance to the wall on ``side`` (+1 left, -1 right)."""

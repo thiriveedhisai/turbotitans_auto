@@ -83,7 +83,10 @@ zones:
       # helix 2x slower and wedged in 3-D: VO is too poor on its sloped surface.
       - behavior: arc_turn
         params: {direction: left, turn_deg: 270, radius: 1.22, speed: 0.5, allow_kturn: false}
-        until: [done]
+        # Or as soon as the 32" tunnel walls close in on both sides (the helix lane is
+        # 42"; corridor only reads while the lidar is level): no AprilTag needed.
+        until: [done, corridor<=0.95]
+        after_distance: 3.0
 
   # 5 ft tunnel under the bridge, then the 32" x 10 ft corridor. Undo the
   # entry offset first (the helix exits off the tunnel axis by the same amount).

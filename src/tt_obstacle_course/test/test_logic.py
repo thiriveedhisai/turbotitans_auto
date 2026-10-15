@@ -349,6 +349,20 @@ def _post(cx, cy, r=0.02):
             ((cx + r, cy + r), (cx - r, cy + r)), ((cx - r, cy + r), (cx - r, cy - r))]
 
 
+def test_buckets_beside_truck_are_not_walls():
+    # Two buckets abeam (0.5 m each side) inside a 4 m wide field: they read as a 1 m
+    # corridor; without them the field walls are 2 m away on each side.
+    walls = [((-3, 2), (4, 2)), ((-3, -2), (4, -2)), ((4, -2), (4, 2))]
+    scan = raycast(walls + arc_walls(0.0, 0.65, 0.15, 0, 2 * math.pi)
+                   + arc_walls(0.0, -0.65, 0.15, 0, 2 * math.pi), 0.0, 0.0, 0.0, n=720)
+    assert scan.side_distance(1) + scan.side_distance(-1) < 1.2
+    clean = scan.without_objects()
+    assert clean.side_distance(1) == pytest.approx(2.0, abs=0.1)
+    assert clean.side_distance(-1) == pytest.approx(2.0, abs=0.1)
+    # Walls themselves are kept: the far wall ahead is still there.
+    assert clean.range_at(0.0) == pytest.approx(4.0, abs=0.05)
+
+
 def test_gate_with_outer_leg_close_to_wall():
     # Hoop 3: outer leg ~0.17 m inside the U-turn wall, which runs past it.
     wall = [((0.5, 0.49), (3.0, 0.49))]

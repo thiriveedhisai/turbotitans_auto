@@ -410,7 +410,8 @@ def start_ros(hub, cfg, args, ros_args):
         cam.subscribe = lambda: (
             node.create_subscription(CameraInfo, args.camera_info, cam.on_info, qos_profile_sensor_data),
             node.create_subscription(Image, args.image, cam.on_image, qos_profile_sensor_data),
-            node.create_subscription(String, '/marker/debug', cam.on_debug, 2))
+            node.create_subscription(String, '/marker/debug', cam.on_debug, 2),
+            node.create_subscription(String, '/green_start/debug', cam.on_green, 2))
         cam.unsubscribe = lambda subs: [node.destroy_subscription(s) for s in subs]
         threading.Thread(target=cam.loop, daemon=True).start()
     return rclpy, node
@@ -430,7 +431,47 @@ class Camera:
         self.K = self.D = None
         self.msg = None
         self.debug, self.debug_t = None, -1e9
+        self.green, self.green_t = None, -1e9
         self.lock = threading.Lock()
+
+    def on_green(self, m):
+        try:
+            self.green, self.green_t = json.loads(m.data), time.monotonic()
+        except ValueError:
+            pass
+
+    def draw_green(self, img):
+        """scripts/green_start.py: every green blob it judged, and the verdict."""
+        g = self.green
+        if g is None or time.monotonic() - self.green_t > 1.0:
+            return
+        cv2 = self.cv2
+        h, w = img.shape[:2]
+        k = w / float(g.get('w') or w)
+        sc = max(w / 640.0, 0.6)
+        line = int(g.get('top_frac', 0.5) * h)
+        for x0 in range(0, w, 30):
+            cv2.line(img, (x0, line), (x0 + 15, line), (0, 200, 0), 1)
+        cv2.putText(img, 'green search above', (4, line - 4), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.4 * sc, (0, 200, 0), 1)
+        for b in g.get('blobs', []):
+            c = (int(b['u'] * k), int(b['v'] * k))
+            if b['ok']:
+                cv2.circle(img, c, int(b['r'] * k), (0, 255, 0), max(3, int(3 * sc)))
+                label, col = 'START ' + b['why'], (0, 255, 0)
+            else:
+                x, y, bw, bh = [int(t * k) for t in b['box']]
+                cv2.rectangle(img, (x, y), (x + bw, y + bh), (0, 140, 255), 1)
+                label, col = 'green: ' + b['why'], (0, 140, 255)
+            org = (max(0, c[0] - int(b['r'] * k)), max(14, c[1] - int(b['r'] * k) - 6))
+            cv2.putText(img, label, org, cv2.FONT_HERSHEY_SIMPLEX, 0.45 * sc, (0, 0, 0), 3)
+            cv2.putText(img, label, org, cv2.FONT_HERSHEY_SIMPLEX, 0.45 * sc, col, 1)
+        txt = (f'green_start = {g.get("value")}' +
+               ('' if g.get('value') else f'  (seen {g.get("hits", 0)}/{g.get("confirm", 3)})'))
+        y0 = h - int(10 * sc)
+        cv2.putText(img, txt, (6, y0), cv2.FONT_HERSHEY_SIMPLEX, 0.6 * sc, (0, 0, 0), 4)
+        cv2.putText(img, txt, (6, y0), cv2.FONT_HERSHEY_SIMPLEX, 0.6 * sc,
+                    (0, 255, 0) if g.get('value') else (255, 255, 255), 2)
 
     def on_debug(self, m):
         try:
@@ -485,6 +526,7 @@ class Camera:
             with hub.cv:
                 state = dict(hub.state)
             draw_overlay(cv2, img, tags, rejected, state, self.K, state.get('bright'))
+            self.draw_green(img)
             hub.set('tag_source', source)
             if img.shape[1] > self.width:
                 f = self.width / img.shape[1]

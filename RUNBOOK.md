@@ -89,6 +89,9 @@ Useful launch arguments:
 | `dash:=true` | false | Start the dashboard with Drive panel, E-STOP and map making |
 | `maps_dir:=<dir>` | `<workspace>/maps` | Where the dashboard saves new maps |
 | `hw_estop:=false` | true | Bench only: drive without the ESP8266 e-stop (see section 3) |
+| `tags:=false` | true | AprilTags never trigger zones or correct heading (lidar/terrain only) |
+| `start_light:=false` | true | No green-light detector: the race starts by itself `start_delay` s after launch |
+| `start_delay:=5.0` | 5.0 | Seconds before that automatic start |
 
 ## 2a. Track day: odometry check, map, verify (trial: 30 min on the track)
 

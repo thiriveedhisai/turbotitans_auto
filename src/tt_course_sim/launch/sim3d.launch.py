@@ -83,6 +83,8 @@ def _setup(context):
                           'turn_radius': str(radius), 'start_zone': start_zone,
                           'map': lc('map'), 'map_correct': lc('map_correct'),
                           'dash': lc('dash'), 'maps_dir': lc('maps_dir'), 'hw_estop': 'false',
+                          'tags': lc('tags'), 'start_light': lc('start_light'),
+                          'teleop': lc('teleop'), 'wall_trace': lc('wall_trace'),
                           'tuning': tuning}.items())
     stop = [RegisterEventHandler(OnProcessExit(target_action=a, on_exit=[EmitEvent(event=Shutdown())]))
             for a in (referee, gz)]
@@ -111,6 +113,10 @@ def generate_launch_description():
         DeclareLaunchArgument('map', default_value=''),
         DeclareLaunchArgument('map_correct', default_value='true'),
         DeclareLaunchArgument('dash', default_value='false'),
+        DeclareLaunchArgument('tags', default_value='true'),
+        DeclareLaunchArgument('start_light', default_value='true'),
+        DeclareLaunchArgument('teleop', default_value='false'),
+        DeclareLaunchArgument('wall_trace', default_value='false'),
         DeclareLaunchArgument('maps_dir', default_value=''),
         OpaqueFunction(function=_setup),
     ])

@@ -92,7 +92,7 @@ class OdomGuard(TTNode):
         self.create_subscription(AckermannDrive, '/ackermann_cmd', self.on_cmd, 10)
         self.create_subscription(LaserScan, self.param('scan_topic', '/scan'), self.on_scan,
                                  qos_profile_sensor_data)
-        self.tag_gain = float(g('tag_heading_gain', 0.04))
+        self.tag_gain = float(g('tag_heading_gain', 0.04)) if bool(g('tag_heading', True)) else 0.0
         self.tag_tol = math.radians(float(g('tag_heading_tol_deg', 15.0)))
         self.tag_range = float(g('tag_heading_max_range', 2.5))
         self.create_subscription(String, '/marker/detections', self.on_tags, 10)

@@ -31,7 +31,7 @@ from std_msgs.msg import Bool, Float32, String
 from tt_obstacle_course.bank_layout import bank_layout
 from tt_obstacle_course.geometry import (OdomTracker, quat_to_rpy, wrap_angle,
                                          yaw_to_quat)
-from tt_obstacle_course.ros_common import RELIABLE_SUB, TTNode, dumps, odom_update
+from tt_obstacle_course.ros_common import LATCHED, RELIABLE_SUB, TTNode, dumps, odom_update
 from tt_obstacle_course.ros_common import run as run_node
 
 
@@ -181,6 +181,10 @@ class MissionManager(TTNode):
         self.pub_state = self.create_publisher(String, '/mission/state', 10)
         self.pub_cap = self.create_publisher(Float32, '/mission/speed_cap', 10)
         self.create_subscription(Bool, '/race_start', self.on_start, RELIABLE_SUB)
+        # Without the start light (launch start_light:=false): start this long after odometry is up.
+        self.auto_start = float(self.param('auto_start_s', -1.0))
+        self.auto_t0 = None
+        self.pub_start = self.create_publisher(Bool, '/race_start', LATCHED)
         self.create_subscription(String, '/zone_event', self.on_marker, 10)
         self.create_subscription(String, '/terrain/state', self.on_terrain, 10)
         self.create_subscription(Bool, '/terrain/lidar_ok', self.on_lidar_ok, 10)
@@ -648,6 +652,14 @@ class MissionManager(TTNode):
     # ---------------------------------------------------------------- loop
     def tick(self):
         self.pub_cap.publish(Float32(data=self.speed_cap()))
+        if not self.started and self.auto_start >= 0.0 and self.odom.valid:
+            now = self.now_s()
+            if self.auto_t0 is None:
+                self.auto_t0 = now
+                self.get_logger().warn(f'No start light: race starts in {self.auto_start:.0f} s')
+            elif now - self.auto_t0 >= self.auto_start:
+                self.pub_start.publish(Bool(data=True))
+                self.on_start(Bool(data=True))
         if not self.started or self.finished or not self.odom.valid:
             return
         now = self.now_s()

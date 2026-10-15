@@ -50,6 +50,9 @@ class MarkerDetector(TTNode):
         self.max_range = float(self.param('max_range', 6.0))
         # Zone events only fire this close, so a far marker can't switch zones early.
         self.trigger_range = float(self.param('trigger_range', 1.5))
+        # Launch tags:=false turns zone events off (detections still published for the dashboard).
+        if not bool(self.param('zone_events', True)):
+            self.trigger_range = -1.0
         self.min_side = float(self.param('min_side_px', 12.0))
         self.confirm = int(self.param('confirm_frames', 2))
         self.repeat_s = float(self.param('repeat_period_s', 2.0))

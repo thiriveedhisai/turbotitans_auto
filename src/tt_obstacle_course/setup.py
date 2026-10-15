@@ -30,6 +30,7 @@ setup(
                 'odom_guard', 'estop_bridge')
         ] + [
             f'tt_dash = {package_name}.debug_dash:main',
+            f'tt_teleop = {package_name}.teleop:main',
             f'tt_cam = {package_name}.debug_dash:main_cam',
             f'tt_lidar = {package_name}.debug_dash:main_lidar',
             f'tt_log = {package_name}.log_story:main',

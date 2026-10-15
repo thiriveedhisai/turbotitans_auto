@@ -64,6 +64,16 @@ class Course:
             for t in np.linspace(0, 1, n):
                 self.obst.append((x1 + t * (x2 - x1), y1 + t * (y2 - y1), bot, bot + h))
 
+    def sloped_wall(self, p0, p1, z0, z1, h=BALE_H, base=None):
+        """Straight wall standing on a surface rising z0 -> z1 (ramps, bridge, bank)."""
+        (x1, y1), (x2, y2) = self.to_world(*p0, base), self.to_world(*p1, base)
+        self.lines.append((x1, y1, x2, y2, 'bale'))
+        self.segs3d.append((x1, y1, z0, z0 + h, x2, y2, z1, z1 + h, 'bale'))
+        n = max(2, int(math.hypot(x2 - x1, y2 - y1) / 0.02))
+        for t in np.linspace(0, 1, n):
+            z = z0 + t * (z1 - z0)
+            self.obst.append((x1 + t * (x2 - x1), y1 + t * (y2 - y1), z, z + h))
+
     def disc(self, u, v, r, h, kind, base=None):
         x, y = self.to_world(u, v, base)
         self.discs.append((x, y, r, kind))
@@ -127,10 +137,15 @@ class Course:
         if vib > 0:
             cx, cy = self.to_world(length / 2, 0.0)
             self.rough3d.append((cx, cy, self.yaw, length, width, z0, vib))
-        if walls[0]:
-            self.wall([(0, width / 2), (length, width / 2)], h=wall_h)
-        if walls[1]:
-            self.wall([(0, -width / 2), (length, -width / 2)], h=wall_h)
+        if walls[0] or walls[1]:
+            zb0, zb1 = max(0.0, z0 - 0.03), max(0.0, z1 - 0.03)
+            for on, v in ((walls[0], width / 2), (walls[1], -width / 2)):
+                if not on:
+                    continue
+                if z0 > 0.005 or z1 > 0.005:
+                    self.sloped_wall((0, v), (length, v), zb0, zb1, h=wall_h)
+                else:
+                    self.wall([(0, v), (length, v)], h=wall_h)
         if self.rails and (z0 > 0.05 or z1 > 0.05):
             self.rail_edges(lambda s: (self.to_world(s, 0.0), self.yaw), length, width,
                             lambda s: z0 + slope * s)
@@ -231,11 +246,11 @@ class Course:
     def build(self):
         self.start_pose = (0.35, 0.0, math.pi)          # behind the start line
         self.straight(3.33, 0.813, 'start')
-        self.straight(3.25, 0.813, 'ramp_up', walls=(False, False), z0=0.0, z1=0.635)
+        self.straight(3.25, 0.813, 'ramp_up', z0=0.0, z1=0.635)
         # The bridge is the roof of the N-S tunnel; a flat landing follows before the helix.
-        self.straight(0.813, 0.813, 'bridge', walls=(False, False), z0=0.635, bot=0.555, layer=1,
+        self.straight(0.813, 0.813, 'bridge', z0=0.635, bot=0.555, layer=1,
                       marker=False)
-        self.straight(0.79, 1.054, 'bridge', walls=(False, False), z0=0.635, bot='slab',
+        self.straight(0.79, 1.054, 'bridge', z0=0.635, bot='slab',
                       marker=False)
         self.arc(1.22, 270, +1, 1.054, 'helix', z0=0.635, z1=0.0,
                  bot='slab', marker=False)
@@ -291,6 +306,11 @@ class Course:
         self.patch(L, L + depth, -2.17, 1.08, 'bank_uturn', z=lambda u, v: (u - L) * tan,
                    grad=(tan, 0.0), base=B)
         self.slab(L, L + depth, -2.17, 1.08, 0.0, depth * tan, 'bank_uturn', thick=0.25, base=B)
+        # Walls round the plane: both sides rising with it, and across the top edge.
+        top = depth * tan
+        self.sloped_wall((L, 1.08), (L + depth, 1.08), 0.0, top, base=B)
+        self.sloped_wall((L, -2.17), (L + depth, -2.17), 0.0, top, base=B)
+        self.sloped_wall((L + depth, -2.17), (L + depth, 1.08), top, top, base=B)
         self.bank_box = (*self.to_world(L + depth / 2, -0.545, B), B[2], depth / 2, 1.625)
         self.waypoints['bank_uturn'] = (*self.to_world(L - 1.0, 0.4, B), B[2])
         # Return lane: 32" at the zone line, heading west.

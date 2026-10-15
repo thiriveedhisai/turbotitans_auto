@@ -71,6 +71,7 @@ class SpeedGovernor(TTNode):
         self.teleop = AckermannDrive()
         self.teleop_t = -1e9
         self.teleop_max = float(p('teleop_max_speed', 1.0))
+        self.teleop_collision = bool(p('teleop_collision_stop', True))
         self.manual = False
         self.create_subscription(AckermannDrive, '/teleop_cmd', self.on_teleop, 10)
         self.create_subscription(Float32, '/terrain/speed_cap', self.on_terrain_cap, 10)
@@ -178,7 +179,8 @@ class SpeedGovernor(TTNode):
             v_lat = math.sqrt(self.max_lat / kappa)
             v = clamp(v, -v_lat, v_lat)
 
-        if self.lidar_ok and self.scan is not None and now - self.scan_t < 0.5:
+        if self.lidar_ok and self.scan is not None and now - self.scan_t < 0.5 \
+                and (self.teleop_collision or not manual):
             # Check the band swept at the steering the wheels actually have now (the
             # servo moves even while stopped), not a straight strip: a wall alongside
             # while steering away from it is not an obstacle.

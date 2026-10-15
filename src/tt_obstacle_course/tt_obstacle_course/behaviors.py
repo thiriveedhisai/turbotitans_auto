@@ -731,6 +731,7 @@ class WallTrace(Behavior):
             self.axis = wrap_angle(round(ctx.odom.yaw / (math.pi / 2)) * (math.pi / 2))
         self.reverse_from = None
         self.reversals = 0
+        self.last_k = 0.0
 
     def aim(self, ctx, speed):
         side = _direction(self.p.get('side', 'left'))
@@ -764,8 +765,12 @@ class WallTrace(Behavior):
                 return Command(-0.3, self.steer_for(-self.nose * k_max), RUNNING, 'reversing')
             self.reverse_from = None
         if not ctx.lidar_ok or ctx.scan is None:
+            blind = float(self.p.get('blind_speed', speed * 0.6))
+            if self.p.get('follow_axis'):
+                # Tilted (ramp, helix): keep the curve it was tracing, at climbing speed.
+                return Command(blind, self.steer_for(self.last_k), status, 'no_lidar')
             kappa = 2.0 * wrap_angle(self.axis - ctx.odom.yaw)
-            return Command(speed * 0.6, self.steer_for(kappa), status, 'no_lidar')
+            return Command(blind, self.steer_for(kappa), status, 'no_lidar')
         want, why = self.aim(ctx, speed)
         limit = float(self.p.get('max_turn_deg', 75.0)) * DEG
         if why == 'seeking wall':
@@ -790,6 +795,7 @@ class WallTrace(Behavior):
         for k in arcs:
             if heading_ok(k) and clearance(k) >= need:
                 info = why if k == want else 'around obstacle'
+                self.last_k = k
                 return Command(speed, self.steer_for(k), status, info)
         # Boxed in: creep on the arc with the most room until it closes, then reverse.
         k = max((k for k in arcs if heading_ok(k)), key=clearance, default=want)

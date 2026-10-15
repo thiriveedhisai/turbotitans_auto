@@ -1,0 +1,15 @@
+# Wall-trace-only mission (launch wall_trace:=true): follow the left wall for the whole
+# course, round corners and past anything standing near it, never leaving it.
+zones:
+  - name: wall_trace
+    speed_cap: 0.9
+    timeout_s: 100000
+    steps:
+      # follow_axis: with no wall in reach keep turning left round tips and hairpins,
+      # no heading limit. wall_target 0.3 m fits the 20" lane (0.25 m centre offset + truck).
+      # blind_speed: while tilted (lidar off) it holds its last curve at this speed; the
+      # 20% ramp needs ~0.8 to get over the crest.
+      - behavior: wall_trace
+        params: {side: left, speed: 0.4, wall_target: 0.3, follow_axis: true, blind_speed: 0.8}
+        until: []
+        timeout_s: 100000

@@ -10,6 +10,12 @@ E-stop:
   ros2 topic pub --once /estop std_msgs/msg/Bool "{data: true}"
 Hardware e-stop (ESP8266 -> mosquitto esp/trigger) is required by default; without it
 the truck will not move. Bench work without the ESP: hw_estop:=false
+Pure course logic (no tags, no start light, no e-stop, no map):
+  ... tags:=false start_light:=false hw_estop:=false     (starts start_delay=5 s after launch)
+Manual driving only (dashboard arrows, or `ros2 run tt_obstacle_course tt_teleop`):
+  ... teleop:=true
+Left-wall tracing only, whole course:
+  ... wall_trace:=true
 """
 
 from launch import LaunchDescription
@@ -49,6 +55,19 @@ def generate_launch_description():
         DeclareLaunchArgument('hw_estop', default_value='true',
                               description='Start estop_bridge (MQTT esp/trigger) and refuse to drive '
                                           'without its RUN heartbeat'),
+        DeclareLaunchArgument('tags', default_value='true',
+                              description='false = AprilTags never trigger zones or correct heading '
+                                          '(lidar/terrain only)'),
+        DeclareLaunchArgument('start_light', default_value='true',
+                              description='false = no green-light detector; the race starts by itself '
+                                          'start_delay s after launch'),
+        DeclareLaunchArgument('start_delay', default_value='5.0',
+                              description='With start_light:=false: seconds before the race starts'),
+        DeclareLaunchArgument('teleop', default_value='false',
+                              description='true = manual driving only: no mission/behaviors, no '
+                                          'collision stops; arrows on the dashboard or tt_teleop'),
+        DeclareLaunchArgument('wall_trace', default_value='false',
+                              description='true = only trace the left wall round the whole course'),
         DeclareLaunchArgument('sensors', default_value='true', description='Start ZED and lidar drivers'),
         DeclareLaunchArgument('camera_nodes', default_value='true',
                               description='Start start_detector and marker_detector'),
@@ -109,20 +128,35 @@ def _stack_and_nav2(context):
     use_map = bool(map_dir)
     correct = use_map and LaunchConfiguration('map_correct').perform(context) == 'true'
     hw_estop = LaunchConfiguration('hw_estop').perform(context) == 'true'
+    tags = LaunchConfiguration('tags').perform(context) == 'true'
+    light = LaunchConfiguration('start_light').perform(context) == 'true'
+    auto_start = -1.0 if light else float(LaunchConfiguration('start_delay').perform(context))
+    no_tags = [] if tags else [{'zone_events': False, 'tag_heading': False}]
+    mission = (PathJoinSubstitution([pkg, 'config', 'mission_wall_trace.yaml'])
+               if LaunchConfiguration('wall_trace').perform(context) == 'true'
+               else LaunchConfiguration('mission'))
+    teleop = LaunchConfiguration('teleop').perform(context) == 'true'
     stack = [
         *([tt('estop_bridge')] if hw_estop else []),
-        tt('odom_guard', [{'map_correction': correct}]),
+        tt('odom_guard', [{'map_correction': correct}, *no_tags]),
         *([tt('map_localizer', [{'map_file': map_dir}])] if use_map else []),
         tt('terrain_monitor'),
-        tt('start_detector', condition=cameras),
-        tt('marker_detector', condition=cameras),
+        *([tt('start_detector', condition=cameras)] if light else []),
+        tt('marker_detector', no_tags, condition=cameras),
         tt('course_perception'),
         tt('behavior_executor'),
         tt('twist_to_ackermann'),
         tt('speed_governor', [{'hw_estop_required': hw_estop}]),
-        tt('mission_manager', [{'mission_file': LaunchConfiguration('mission'), 'use_nav2': use_nav2,
-                                'start_zone': LaunchConfiguration('start_zone')}]),
+        tt('mission_manager', [{'mission_file': mission, 'use_nav2': use_nav2,
+                                'start_zone': LaunchConfiguration('start_zone'),
+                                'auto_start_s': auto_start}]),
     ]
+    if teleop:
+        # Only what driving by hand needs; the dashboard shows odometry and the lidar.
+        stack = [*([tt('estop_bridge')] if hw_estop else []),
+                 tt('odom_guard'), tt('terrain_monitor'),
+                 tt('speed_governor', [{'hw_estop_required': hw_estop,
+                                        'teleop_collision_stop': False}])]
 
     bt_xml = PathJoinSubstitution([pkg, 'config', 'navigate_ackermann.xml'])
     nav2 = GroupAction(condition=IfCondition(use_nav2), actions=[
@@ -140,7 +174,7 @@ def _stack_and_nav2(context):
              parameters=[nav2_params, *sim_time]),
     ])
     dash = []
-    if LaunchConfiguration('dash').perform(context) == 'true':
+    if teleop or LaunchConfiguration('dash').perform(context) == 'true':
         maps_dir = LaunchConfiguration('maps_dir').perform(context).strip()
         dash.append(Node(package='tt_obstacle_course', executable='tt_dash', name='tt_dash',
                          output='screen', parameters=sim_time,
@@ -151,4 +185,4 @@ def _stack_and_nav2(context):
         arguments=['--x', LaunchConfiguration('laser_x'), '--y', LaunchConfiguration('laser_y'),
                    '--z', LaunchConfiguration('laser_z'), '--yaw', LaunchConfiguration('laser_yaw'),
                    '--frame-id', 'zed_camera_link', '--child-frame-id', 'laser'])
-    return [laser_tf, *stack, nav2, *dash]
+    return [laser_tf, *stack, *([] if teleop else [nav2]), *dash]

@@ -20,7 +20,7 @@
     laser_offset_y: 0.0
     camera_height: 0.20                # MEASURE ZED left-lens centre above the ground
     vehicle:
-      wheelbase: 0.32                  # MEASURE (axle to axle)
+      wheelbase: 0.247                 # as in the proven lidar_steer controller
       width: 0.203                     # 8"
       length: 0.432                    # 17"
       height: 0.22                     # 8-9"
@@ -38,18 +38,21 @@ rc_car_controller:
     input_topic: "/ackermann_cmd"
     pca_osc_clock_hz: 25000000         # PCA9685 is often 26-27 MHz; calibrate with a scope
     steer_trim_us: 0
-    speed_map_mode: "table"
-    # Raw measured pulses (forward > neutral). Fill from a calibration run.
+    # Same as the proven lidar_steer controller: positive (left) steering_angle needed
+    # a negated pulse on this truck.
+    steering_direction: -1
+    speed_map_mode: "linear"           # "table" once fwd/rev pulses are measured below
     fwd_speed_mps: [0.0, 0.3, 0.6, 1.0, 1.5, 2.0, 3.0]
     fwd_pulse_us: [1500, 1565, 1590, 1615, 1650, 1690, 1770]
     rev_speed_mps: [0.0, -0.3, -0.6, -1.0]
     rev_pulse_us: [1500, 1435, 1410, 1380]
-    esc_deadband_us: 40
+    esc_deadband_us: 0
     esc_reverse_mode: "double_tap"     # most hobby ESCs brake on the first reverse pulse
     esc_reverse_brake_ms: 120
     esc_reverse_neutral_ms: 120
     speed_scale: 1.0                   # quick global fudge: real/commanded mismatch
-    speed_feedback_enabled: true       # ZED odometry closes the loop (no encoders)
+    # Off: ZED speed is too noisy/laggy to close the throttle loop on (random surges).
+    speed_feedback_enabled: false
     speed_feedback_topic: "/zed/zed_node/odom"
     speed_kp_us_per_mps: 40.0
     speed_ki_us_per_m: 25.0

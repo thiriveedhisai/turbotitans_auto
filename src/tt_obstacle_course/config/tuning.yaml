@@ -62,7 +62,7 @@ rc_car_controller:
 # ------------------------------------------------ final arbitration + safety
 speed_governor:
   ros__parameters:
-    global_speed_scale: 1.0            # scales every zone cap at once
+    global_speed_scale: 0.5            # scales every zone cap at once (0.5: truck flipped at full)
     max_speed: 2.5
     max_reverse_speed: 0.6
     max_accel: 1.5

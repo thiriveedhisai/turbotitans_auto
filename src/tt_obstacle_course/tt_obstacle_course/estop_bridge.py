@@ -1,8 +1,8 @@
 """Hardware E-stop: ESP8266 over MQTT -> /estop/hw (true = stop).
 
 The ESP publishes {"pin_state": int, ...} on esp/trigger to the local mosquitto broker.
-Only pin_state counts: STOP when it equals stop_pin_state (1 = button pressed), RUN
-otherwise; other fields (heartbeat) are ignored. STOP until the first message arrives;
+Only pin_state counts: STOP when it equals stop_pin_state (0 = button pressed on this ESP),
+RUN otherwise; other fields (heartbeat) are ignored. STOP until the first message arrives;
 after that the last pin_state holds. speed_governor latches a STOP.
 """
 
@@ -21,7 +21,7 @@ class EstopBridge(TTNode):
         self.host = str(self.param('mqtt_host', 'localhost'))
         self.port = int(self.param('mqtt_port', 1883))
         self.topic = str(self.param('mqtt_topic', 'esp/trigger'))
-        self.stop_pin = int(self.param('stop_pin_state', 1))
+        self.stop_pin = int(self.param('stop_pin_state', 0))
 
         self.lock = threading.Lock()
         self.pin_state = None
@@ -68,7 +68,11 @@ class EstopBridge(TTNode):
             self.get_logger().error(f'E-STOP: bad payload {msg.payload[:80]!r}: {e}')
             return
         with self.lock:
+            changed = pin != self.pin_state
             self.pin_state = pin
+        if changed:
+            self.get_logger().info(f'E-STOP: ESP pin_state = {pin} '
+                                   f'({"STOP" if pin == self.stop_pin else "RUN"})')
 
     def tick(self):
         with self.lock:

@@ -88,7 +88,7 @@ estop_bridge:
     mqtt_host: localhost               # mosquitto on the Jetson
     mqtt_port: 1883
     mqtt_topic: esp/trigger            # {"pin_state": int, ...}; heartbeat is ignored
-    stop_pin_state: 1                  # pin_state value that means STOP (button pressed)
+    stop_pin_state: 0                  # pin_state the ESP sends while the button is PRESSED
 
 # ------------------------------------------------ ZED tracking-dropout handling
 odom_guard:

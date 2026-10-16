@@ -229,7 +229,7 @@ sim, updating from a run with moved buckets/hoops cut the hoop-zone error from 0
 **Hardware e-stop (ESP8266).** The ESP sends `{"pin_state": int, ...}` on MQTT
 `esp/trigger` to mosquitto on the Jetson. `estop_bridge` turns it into `/estop/hw` (shown as
 `hw e-stop` in the dashboard state panel) and the speed governor refuses to move unless it says RUN:
-- STOP when `pin_state` is `stop_pin_state` (1 = button pressed, in `tuning.yaml`), RUN otherwise.
+- STOP when `pin_state` is `stop_pin_state` (0 = button pressed on our ESP, in `tuning.yaml`), RUN otherwise.
   Only `pin_state` counts (any `heartbeat` field is ignored); the last state holds between messages.
 - STOP until the first message arrives (`waiting for e-stop`).
 - Once it went RUN -> STOP it **stays latched** even if the button comes back: put the button back

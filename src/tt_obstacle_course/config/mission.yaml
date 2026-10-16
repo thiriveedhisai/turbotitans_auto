@@ -50,7 +50,8 @@ zones:
   # this is heading-hold on the direction lined up in the start corridor,
   # shifted right (helix outer side) by $helix_offset (0.25 m at R=1.52, 0 at R=1.2).
   - name: ramp_up
-    speed_cap: 0.9
+    # x global_speed_scale 0.5 = 0.9 m/s: slower stalled at the crest and rolled back.
+    speed_cap: 1.8
     timeout_s: 12
     steps:
       - behavior: heading_hold
@@ -63,7 +64,7 @@ zones:
   # odometry rise (camera ~0.15 m before the crest, speed independent):
   # 0.15 + 1.6 + axle_to_camera 0.38 = 2.13. MEASURE on the real bridge.
   - name: bridge
-    speed_cap: 0.5
+    speed_cap: 1.0                       # x 0.5 = 0.5 m/s, enough to finish the crest
     timeout_s: 10
     allow_marker_skip: false
     steps:

@@ -48,7 +48,7 @@ Before every session:
 - [ ] The ZED is on a USB3 port.
 - [ ] Battery is charged, and the wheels are off the ground for the first test.
 - [ ] Mosquitto runs (`systemctl is-active mosquitto`), the ESP8266 e-stop is powered, and
-      `mosquitto_sub -v -t '#' -C 3 -W 10` prints its `esp/trigger {"heartbeat": .., "pin_state": ..}`
+      `mosquitto_sub -v -t '#' -C 3 -W 10` prints its `esp/trigger {"pin_state": ..}`
       messages. Nothing within 10 s: the ESP isn't reaching the broker. Mosquitto 2.x listens on
       localhost only by default; the ESP connects over Wi-Fi, so open it to the network once:
       `printf 'listener 1883 0.0.0.0\nallow_anonymous true\n' | sudo tee /etc/mosquitto/conf.d/esp.conf && sudo systemctl restart mosquitto`
@@ -226,11 +226,12 @@ sim, updating from a run with moved buckets/hoops cut the hoop-zone error from 0
 
 - E-stop zeroes speed but holds the steering where it is.
 
-**Hardware e-stop (ESP8266).** The ESP sends `{"heartbeat": int, "pin_state": int}` on MQTT
+**Hardware e-stop (ESP8266).** The ESP sends `{"pin_state": int, ...}` on MQTT
 `esp/trigger` to mosquitto on the Jetson. `estop_bridge` turns it into `/estop/hw` (shown as
 `hw e-stop` in the dashboard state panel) and the speed governor refuses to move unless it says RUN:
-- STOP when `pin_state` is `stop_pin_state` (0, in `tuning.yaml`; check on the bench that pressing
-  the button shows STOP), `heartbeat` is 0, or nothing arrived for 2.5 s (radio lost).
+- STOP when `pin_state` is `stop_pin_state` (1 = button pressed, in `tuning.yaml`), RUN otherwise.
+  Only `pin_state` counts (any `heartbeat` field is ignored); the last state holds between messages.
+- STOP until the first message arrives (`waiting for e-stop`).
 - Once it went RUN -> STOP it **stays latched** even if the button comes back: put the button back
   to RUN, then press **Release** on the dashboard (or `/estop` false above).
 - The STOP it shows at boot (before the ESP is heard) is not latched.

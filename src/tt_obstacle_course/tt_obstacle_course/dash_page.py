@@ -182,7 +182,7 @@ function showState(s){
   const deg=r=>r==null?'-':(r*180/Math.PI).toFixed(0)+'\u00b0';
   rows.push(['race',(ms.started?(ms.finished?'FINISHED':'running'):'waiting for start')+'  t='+fmt(ms.elapsed)+'s'+(st.estop?'  E-STOP':'')]);
   const hw=st.hw_estop;
-  rows.push(['hw e-stop',hw?((hw.stop?'STOP':'RUN')+'  '+hw.reason+'  hb '+hw.heartbeat+' pin '+hw.pin_state+'  age '+hw.age+'s'):'not running']);
+  rows.push(['hw e-stop',hw?((hw.stop?'STOP':'RUN')+'  '+hw.reason+'  pin '+hw.pin_state):'not running']);
   rows.push(['zone / step',(ms.zone||'-')+' / '+fmt(ms.step)+(ms.phase?'  phase '+ms.phase:'')]);
   rows.push(['maneuver',(bs.behavior||'-')+'  '+(bs.status||'')+(bs.info?'  ('+bs.info+')':'')]);
   rows.push(['params',cmd.params?JSON.stringify(cmd.params):'-']);

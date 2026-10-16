@@ -37,60 +37,54 @@ GREEN_LOWER = [35, 70, 25]
 GREEN_UPPER = [95, 255, 255]
 
 
-def green_blobs(bgr, lower=GREEN_LOWER, upper=GREEN_UPPER, min_radius=3.0, top_frac=0.5,
-                min_circularity=0.75, min_fill=0.83, max_aspect=1.35, min_solidity=0.9):
+def green_blobs(bgr, lower=GREEN_LOWER, upper=GREEN_UPPER, min_radius=4.5, top_frac=0.5,
+                min_circularity=0.7, min_fill=0.7, max_aspect=1.3, min_solidity=0.88):
     """Every green blob big enough to judge, as dicts {u, v, r, box, ok, why}; circles
     that pass all tests first, biggest first. Only the part above top_frac of the frame
-    is searched. Small blobs (r < 8 px: a disc far away) are judged by pixel counts, as
-    their outline is too jagged for a roundness ratio: about as wide as tall, and filling
-    ~pi/4 of their box (a square fills 1, a diagonal bar or triangle ~1/2). Bigger ones
-    must also be round (4*pi*A/P^2), fill their enclosing circle and have no dents."""
+    is searched. A circle must be over min_radius (half its longer side), round
+    (4*pi*A/P^2), fill its enclosing circle, be about as wide as tall (max_aspect 1.3
+    lets a 5 x 4 px oval through) and have no dents (area / hull)."""
     roi = bgr[:max(1, int(top_frac * bgr.shape[0]))]
     hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
     mask = cv2.inRange(hsv, np.array(lower, np.uint8), np.array(upper, np.uint8))
-    # A 3x3 open would erase a 3 px disc: only clean up specks when looking for big ones.
-    if min_radius >= 6:
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
-    n, labels, stats, cents = cv2.connectedComponentsWithStats(mask, connectivity=8)
-    min_area = math.pi * min_radius * min_radius * 0.6
+    # 3x3: clears 1-2 px specks (green wall texture, JPEG edges) but keeps a 4 px disc.
+    k = np.ones((3, 3), np.uint8)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, k)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, k)
     blobs = []
-    for i in range(1, n):
-        x, y, bw, bh, area = (int(t) for t in stats[i])
-        if area < min_area:
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    for c in contours:
+        x, y, bw, bh = cv2.boundingRect(c)
+        # Radius from the pixel box: half its longer side (blur/JPEG eat ~1 px of edge,
+        # so a drawn radius-5 disc spans ~9 px -> 4.5).
+        r = max(bw, bh) / 2.0
+        if r <= min_radius - 1.5:
             continue
-        u, v = cents[i]
-        r = math.sqrt(area / math.pi)
+        area = cv2.contourArea(c)
+        perim = cv2.arcLength(c, True)
+        px_area = area + perim / 2.0 + 1.0
+        (u, v), r_enc = cv2.minEnclosingCircle(c)
+        circ = 4.0 * math.pi * px_area / (perim + 4.0) ** 2 if perim > 0 else 0.0
+        # Share of the enclosing circle: a disc ~0.85+, a 5x4 oval ~0.75, a square ~0.64.
+        fill = px_area / (math.pi * (r_enc + 0.5) ** 2)
         aspect = max(bw, bh) / max(1, min(bw, bh))
-        box_fill = area / float(bw * bh)
-        why = None
-        if aspect > max_aspect:
+        hull = cv2.contourArea(cv2.convexHull(c))
+        solidity = area / hull if hull > 0 else 0.0
+        if r < min_radius:
+            why = f'too small r={r:.1f}'
+        elif aspect > max_aspect:
             why = f'not square {aspect:.2f}'
-        elif not 0.55 <= box_fill <= 0.92:
-            why = f'not a disc (fills {box_fill:.2f} of box)'
-        elif r >= 8:
-            sub = (labels[y:y + bh, x:x + bw] == i).astype(np.uint8)
-            cs, _ = cv2.findContours(sub, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-            c = max(cs, key=cv2.contourArea)
-            perim = cv2.arcLength(c, True)
-            circ = 4.0 * math.pi * cv2.contourArea(c) / (perim * perim) if perim > 0 else 0.0
-            (_, _), r_enc = cv2.minEnclosingCircle(c)
-            fill = area / (math.pi * (r_enc + 0.5) ** 2)
-            hull = cv2.contourArea(cv2.convexHull(c))
-            solidity = cv2.contourArea(c) / hull if hull > 0 else 0.0
-            if circ < min_circularity:
-                why = f'not round {circ:.2f}'
-            elif fill < min_fill:
-                why = f'not filled {fill:.2f}'
-            elif solidity < min_solidity:
-                why = f'dented {solidity:.2f}'
-        if why is None:
-            why = f'circle r={r:.0f}'
-        elif r >= 8:
+        elif circ < min_circularity:
+            why = f'not round {circ:.2f}'
+        elif fill < min_fill:
+            why = f'not filled {fill:.2f}'
+        elif solidity < min_solidity:
+            why = f'dented {solidity:.2f}'
+        else:
+            why = f'circle r={r:.1f} round {circ:.2f}'
+        if not why.startswith('circle') and r >= 8:
             # A disc joined to something thin (stick, tape): its largest inscribed circle.
-            sub = (labels[y:y + bh, x:x + bw] == i).astype(np.uint8)
-            cs, _ = cv2.findContours(sub, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-            disc = inscribed_disc(max(cs, key=cv2.contourArea) + [x, y], min_radius)
+            disc = inscribed_disc(c, min_radius)
             if disc is not None:
                 u, v, r = disc
                 why = f'circle r={r:.0f} (on a stick/edge)'
@@ -125,13 +119,13 @@ class GreenStart(Node):
         super().__init__('green_start')
         p = self.declare_parameter
         self.image_topic = p('image_topic', '/zed/zed_node/rgb/color/rect/image').value
-        self.min_radius = float(p('min_radius_px', 3.0).value)
+        # Radius = half the longer side: must be over 4 px (a 5 x 4 px oval passes).
+        self.min_radius = float(p('min_radius_px', 4.5).value)
         self.top_frac = float(p('top_frac', 0.5).value)
-        self.min_circ = float(p('min_circularity', 0.75).value)
-        # Of its enclosing circle a disc fills >= 0.86, a square from 14 px up <= 0.78.
-        self.min_fill = float(p('min_fill', 0.83).value)
-        self.max_aspect = float(p('max_aspect', 1.35).value)
-        self.min_solidity = float(p('min_solidity', 0.9).value)
+        self.min_circ = float(p('min_circularity', 0.7).value)
+        self.min_fill = float(p('min_fill', 0.7).value)
+        self.max_aspect = float(p('max_aspect', 1.3).value)
+        self.min_solidity = float(p('min_solidity', 0.88).value)
         self.confirm = int(p('confirm_frames', 3).value)
         # Full resolution: a far start light is only a few px across (only the top part is searched).
         self.scale = float(p('downscale', 1.0).value)

@@ -1,13 +1,13 @@
 """Hardware E-stop: ESP8266 over MQTT -> /estop/hw (true = stop).
 
-The ESP publishes {"heartbeat": int, "pin_state": int} on esp/trigger to the local
-mosquitto broker. Stop when pin_state == stop_pin_state, heartbeat == 0, or nothing
-arrived for heartbeat_timeout s (radio lost = stop). speed_governor latches it.
+The ESP publishes {"pin_state": int, ...} on esp/trigger to the local mosquitto broker.
+Only pin_state counts: STOP when it equals stop_pin_state (1 = button pressed), RUN
+otherwise; other fields (heartbeat) are ignored. STOP until the first message arrives;
+after that the last pin_state holds. speed_governor latches a STOP.
 """
 
 import json
 import threading
-import time
 
 from std_msgs.msg import Bool, String
 
@@ -21,13 +21,10 @@ class EstopBridge(TTNode):
         self.host = str(self.param('mqtt_host', 'localhost'))
         self.port = int(self.param('mqtt_port', 1883))
         self.topic = str(self.param('mqtt_topic', 'esp/trigger'))
-        self.timeout = float(self.param('heartbeat_timeout', 2.5))
-        self.stop_pin = int(self.param('stop_pin_state', 0))
+        self.stop_pin = int(self.param('stop_pin_state', 1))
 
         self.lock = threading.Lock()
-        self.heartbeat = 0
-        self.pin_state = self.stop_pin
-        self.last_rx = 0.0
+        self.pin_state = None
         self.connected = False
         self.stop = None
 
@@ -66,24 +63,21 @@ class EstopBridge(TTNode):
 
     def on_message(self, client, userdata, msg):
         try:
-            data = json.loads(msg.payload.decode('utf-8'))
-            hb, pin = int(data.get('heartbeat', 1)), int(data.get('pin_state', self.stop_pin))
-        except (ValueError, TypeError, AttributeError) as e:
+            pin = int(json.loads(msg.payload.decode('utf-8'))['pin_state'])
+        except (ValueError, TypeError, AttributeError, KeyError) as e:
             self.get_logger().error(f'E-STOP: bad payload {msg.payload[:80]!r}: {e}')
             return
         with self.lock:
-            self.heartbeat, self.pin_state, self.last_rx = hb, pin, time.monotonic()
+            self.pin_state = pin
 
     def tick(self):
         with self.lock:
-            age = time.monotonic() - self.last_rx
-            hb, pin = self.heartbeat, self.pin_state
-        if age > self.timeout:
-            hb, pin = 0, self.stop_pin
-        stop = hb == 0 or pin == self.stop_pin
-        reason = ('no mqtt broker' if not self.connected else
-                  'no heartbeat' if age > self.timeout else
-                  'heartbeat 0' if hb == 0 else 'button' if stop else 'ok')
+            pin = self.pin_state
+        if pin is None:
+            stop, reason = True, 'no mqtt broker' if not self.connected else 'waiting for e-stop'
+        else:
+            stop = pin == self.stop_pin
+            reason = 'button' if stop else 'ok'
         if stop != self.stop:
             if stop:
                 self.get_logger().warn(f'E-STOP: hardware STOP ({reason})')
@@ -92,8 +86,7 @@ class EstopBridge(TTNode):
             self.stop = stop
         self.pub.publish(Bool(data=stop))
         self.status_pub.publish(String(data=json.dumps(
-            {'stop': stop, 'reason': reason, 'heartbeat': hb, 'pin_state': pin,
-             'age': round(min(age, 99.0), 1)})))
+            {'stop': stop, 'reason': reason, 'pin_state': pin})))
 
     def destroy_node(self):
         if self.client is not None:

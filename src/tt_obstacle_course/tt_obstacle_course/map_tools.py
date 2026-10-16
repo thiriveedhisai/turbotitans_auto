@@ -465,6 +465,8 @@ class CourseMap:
         img = np.full(self.occ.shape + (3,), 110, np.uint8)
         img[self.known] = (235, 235, 235)
         img[self.occ] = (0, 0, 0)
+        # Row 0 is the lowest y: flip so north is up, like the labels and map.pgm.
+        img = img[::-1].copy()
         img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_NEAREST)
         h = img.shape[0]
 
